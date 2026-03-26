@@ -75,9 +75,11 @@ public class DfmForm {
         private String mapToTs(String fieldName, String dt) {
             if (dt == null) return "string";
             if (fieldName != null && (fieldName.startsWith("cdg_") || fieldName.startsWith("nmr_"))) return "number";
+            // Item 6: campos dat_ como Date no TypeScript
+            if (fieldName != null && fieldName.startsWith("dat_")) return "Date";
             if (dt.contains("Integer") || dt.contains("Smallint") || dt.contains("Float") ||
                 dt.contains("Currency") || dt.contains("BCD")) return "number";
-            if (dt.contains("Date") || dt.contains("Time") || dt.contains("Timestamp")) return "string";
+            if (dt.contains("Date") || dt.contains("Time") || dt.contains("Timestamp")) return "Date";
             if (dt.contains("Boolean")) return "boolean";
             return "string";
         }

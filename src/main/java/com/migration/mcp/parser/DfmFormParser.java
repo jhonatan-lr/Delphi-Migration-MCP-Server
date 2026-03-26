@@ -280,8 +280,10 @@ public class DfmFormParser {
                     String field = parts[0].trim();
                     int width = 10;
                     try { width = Integer.parseInt(parts[1].trim()); } catch (Exception ignored) {}
-                    String header = decodeDfmString(parts[2].trim());
-                    String subHeader = parts.length >= 5 ? decodeDfmString(parts[4].trim()) : "";
+                    // Item 5: limpar tabs e espaços extras dos headers
+                    String header = decodeDfmString(parts[2].trim()).replaceAll("[\\t\\r\\n]+", " ").trim();
+                    String subHeader = parts.length >= 5
+                            ? decodeDfmString(parts[4].trim()).replaceAll("[\\t\\r\\n]+", " ").trim() : "";
                     // Pula campos de 1 char de largura sem header (ícones visuais)
                     if (width <= 1 && header.trim().isEmpty()) continue;
                     columns.add(new DfmForm.GridColumn(field, header, subHeader, width));

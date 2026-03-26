@@ -612,7 +612,20 @@ public class DelphiSourceParser {
             }
         }
 
-        return rules;
+        // Item 4: deduplicar regras pelo sourceCode (mantém a primeira ocorrência)
+        Set<String> seenRules = new LinkedHashSet<>();
+        List<BusinessRule> dedupedRules = new ArrayList<>();
+        for (BusinessRule rule : rules) {
+            String key = rule.getSourceCode() != null ? rule.getSourceCode().trim() : rule.getDescription();
+            if (seenRules.add(key)) {
+                dedupedRules.add(rule);
+            }
+        }
+        // Re-numera IDs
+        for (int i = 0; i < dedupedRules.size(); i++) {
+            dedupedRules.get(i).setId("BR_" + (i + 1));
+        }
+        return dedupedRules;
     }
 
     private String generateValidationJava(String condition, String action) {

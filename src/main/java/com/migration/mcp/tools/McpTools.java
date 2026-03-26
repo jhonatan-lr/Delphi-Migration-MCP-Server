@@ -27,17 +27,35 @@ class AnalyzeDelphiUnitTool extends BaseTool {
                 "analyze_delphi_unit",
                 "Analisa um arquivo .pas (Pascal/Delphi) e extrai sua estrutura completa: classes, " +
                 "métodos, campos, dependências (uses), queries SQL e regras de negócio. " +
-                "Aceita conteúdo do arquivo OU caminho no filesystem.",
-                buildInputSchema(
-                        "content", "string", "Conteúdo do arquivo .pas (alternativa ao file_path)",
-                        "file_path", "string", "Caminho para o arquivo .pas no filesystem",
-                        "unit_name", "string", "Nome da unit (opcional, extraído automaticamente)"
-                )
+                "Aceita conteúdo do arquivo OU caminho no filesystem. " +
+                "Use include_body=false (padrão) para output compacto, true para incluir corpo dos métodos.",
+                """
+                {
+                  "type": "object",
+                  "properties": {
+                    "content": {"type": "string", "description": "Conteúdo do arquivo .pas (alternativa ao file_path)"},
+                    "file_path": {"type": "string", "description": "Caminho para o arquivo .pas no filesystem"},
+                    "unit_name": {"type": "string", "description": "Nome da unit (opcional, extraído automaticamente)"},
+                    "include_body": {"type": "boolean", "description": "Incluir corpo dos métodos no resultado (padrão: false)"}
+                  },
+                  "required": ["content"]
+                }
+                """
         );
         return new McpServerFeatures.SyncToolSpecification(tool, (exchange, args) -> withLogging("analyze_delphi_unit", args, () -> {
                 String content = getContent(args);
                 String filePath = optionalString(args, "file_path", "unknown.pas");
+                boolean includeBody = args.containsKey("include_body") && Boolean.TRUE.equals(args.get("include_body"));
                 DelphiUnit unit = parser.parse(content, filePath);
+                // Remove bodies para reduzir output (de 140K para ~15K)
+                if (!includeBody) {
+                    for (DelphiClass dc : unit.getClasses()) {
+                        for (DelphiProcedure proc : dc.getMethods()) {
+                            proc.setBody(null);
+                        }
+                    }
+                }
+                unit.setRawContent(null); // nunca incluir raw content na análise
                 return success(unit);
         }));
     }
