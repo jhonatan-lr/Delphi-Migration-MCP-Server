@@ -360,15 +360,33 @@ class GenerateJavaClassTool extends BaseTool {
                     if (cleanBase.isEmpty()) cleanBase = baseName;
 
                     if (generate.contains("entity")) {
-                        // Extrai nome da tabela principal da primeira SQL SELECT
-                        String mainTable = null;
-                        for (SqlQuery sq : unit.getSqlQueries()) {
-                            if ("SELECT".equals(sq.getQueryType()) && sq.getTablesUsed() != null && !sq.getTablesUsed().isEmpty()) {
-                                mainTable = sq.getTablesUsed().get(0).toLowerCase();
-                                break;
+                        // Agrupa campos por dataset para gerar entities separadas (master-detail)
+                        Map<String, List<DfmForm.DatasetField>> byDataset = new LinkedHashMap<>();
+                        if (finalDfmFields != null) {
+                            for (DfmForm.DatasetField df : finalDfmFields) {
+                                String ds = df.getDatasetName() != null ? df.getDatasetName() : "default";
+                                byDataset.computeIfAbsent(ds, k -> new ArrayList<>()).add(df);
                             }
                         }
-                        generatedFiles.put(cleanBase + "Entity.java", generator.generateEntity(dc, packageName, finalDfmFields, mainTable));
+
+                        if (byDataset.size() <= 1) {
+                            // 1 dataset ou sem DFM → 1 entity
+                            String mainTable = extractMainTable(unit.getSqlQueries(), 0);
+                            generatedFiles.put(cleanBase + "Entity.java",
+                                    generator.generateEntity(dc, packageName, finalDfmFields, mainTable));
+                        } else {
+                            // Múltiplos datasets → 1 entity por dataset
+                            int sqlIdx = 0;
+                            for (Map.Entry<String, List<DfmForm.DatasetField>> entry : byDataset.entrySet()) {
+                                String dsName = entry.getKey();
+                                List<DfmForm.DatasetField> dsFields = entry.getValue();
+                                // Infere nome da entity: cdsPedido → PedidoAutomatico, cdsProdutos → ItemPedidoAutomatico
+                                String entityName = inferEntityName(dsName, cleanBase);
+                                String table = extractMainTable(unit.getSqlQueries(), sqlIdx++);
+                                generatedFiles.put(entityName + "Entity.java",
+                                        generator.generateEntity(dc, packageName, dsFields, table));
+                            }
+                        }
                     }
                     if (generate.contains("repository")) {
                         generatedFiles.put(cleanBase + "Repository.java", generator.generateRepository(dc, packageName));
@@ -392,6 +410,43 @@ class GenerateJavaClassTool extends BaseTool {
                 result.put("generatedFiles", generatedFiles);
                 return success(result);
         }));
+    }
+
+    /** Extrai tabela principal da N-ésima SQL SELECT */
+    private String extractMainTable(List<SqlQuery> queries, int index) {
+        int count = 0;
+        for (SqlQuery sq : queries) {
+            if ("SELECT".equals(sq.getQueryType()) && sq.getTablesUsed() != null && !sq.getTablesUsed().isEmpty()) {
+                if (count == index) return sq.getTablesUsed().get(0).toLowerCase();
+                count++;
+            }
+        }
+        return null;
+    }
+
+    /** Infere nome da entity a partir do nome do dataset:
+     *  cdsPedido → PedidoAutomatico (mantém o baseName)
+     *  cdsProdutos → ItemPedidoAutomatico (prefixo Item)
+     *  cdsFiltroSecao → FiltroSecao (usa o nome do dataset)
+     */
+    private String inferEntityName(String datasetName, String baseName) {
+        if (datasetName == null) return baseName;
+        // Remove prefixos cds/qry/dts/dsp
+        String clean = datasetName.replaceAll("^(?i)(cds|qry|dts|dsp)", "");
+        if (clean.isEmpty()) return baseName;
+
+        // Se o dataset é o "master" (Pedido, Dados, etc.), usa o baseName
+        String lower = clean.toLowerCase();
+        if (lower.equals("pedido") || lower.equals("dados") || lower.equals("master") ||
+            lower.contains("pedido") && !lower.contains("produto") && !lower.contains("item")) {
+            return baseName;
+        }
+        // Se é "Produtos", "Itens", etc., prefixo Item
+        if (lower.contains("produto") || lower.contains("iten") || lower.contains("detalhe")) {
+            return "Item" + baseName;
+        }
+        // Se é "Filtro", "Log", etc., usa o nome do dataset
+        return clean;
     }
 }
 

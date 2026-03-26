@@ -316,10 +316,16 @@ public class DfmFormParser {
             // cdsPedidocdg_ped_auto -> cdg_ped_auto (remove "cdsPedido")
             // qryProdutoscdg_produto -> cdg_produto (remove "qryProdutos")
             String fieldName = extractFieldName(fullName);
-            if (fieldName.isEmpty() || seen.contains(fieldName)) continue;
-            seen.add(fieldName);
+            // Extrai nome do dataset: cdsPedidocdg_ped_auto → cdsPedido
+            String datasetName = fullName.substring(0, fullName.length() - fieldName.length());
+            if (fieldName.isEmpty()) continue;
+            // Dedup por datasetName+fieldName (não só fieldName — permite mesmo campo em datasets diferentes)
+            String dedupKey = datasetName + "." + fieldName;
+            if (seen.contains(dedupKey)) continue;
+            seen.add(dedupKey);
 
             DfmForm.DatasetField df = new DfmForm.DatasetField(fieldName, delphiType);
+            df.setDatasetName(datasetName);
 
             // Verifica Visible = False
             if (block.matches("(?si).*Visible\\s*=\\s*False.*")) {

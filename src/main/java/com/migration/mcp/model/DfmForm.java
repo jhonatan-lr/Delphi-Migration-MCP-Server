@@ -52,6 +52,7 @@ public class DfmForm {
         private String javaType;    // ex: Integer
         private String tsType;      // ex: number
         private boolean visible = true;
+        private String datasetName; // ex: cdsPedido, cdsProdutos (para agrupar master-detail)
 
         public DatasetField() {}
         public DatasetField(String name, String delphiType) {
@@ -98,6 +99,8 @@ public class DfmForm {
         public void setTsType(String tt) { this.tsType = tt; }
         public boolean isVisible() { return visible; }
         public void setVisible(boolean v) { this.visible = v; }
+        public String getDatasetName() { return datasetName; }
+        public void setDatasetName(String d) { this.datasetName = d; }
     }
 
     public String getFormName() { return formName; }

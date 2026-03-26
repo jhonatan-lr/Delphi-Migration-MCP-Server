@@ -150,6 +150,14 @@ public class JavaCodeGenerator {
                 continue;
             }
 
+            // Enum com @Convert
+            if (f.isEnum) {
+                sb.append("  @Column(name = \"").append(f.colName).append("\")\n");
+                sb.append("  @Convert(converter = ").append(f.enumClassName.replace("Enum", "Converter")).append(".class)\n");
+                sb.append("  private ").append(f.enumClassName).append(" ").append(f.javaName).append(";\n\n");
+                continue;
+            }
+
             // Campo normal
             sb.append("  @Column(name = \"").append(f.colName).append("\")\n");
             sb.append("  private ").append(f.javaType).append(" ").append(f.javaName).append(";\n\n");
@@ -186,7 +194,10 @@ public class JavaCodeGenerator {
         String javaName;          // nome Java descritivo (camelCase)
         String javaType;          // Integer, String, BigDecimal, Boolean
         boolean isDate;           // usa LogusDateTime
+        boolean isEnum;           // flg_ → enum com @Convert
+        String enumClassName;     // ex: SituacaoPedidoAutomaticoEnum
         String manyToOneEntity;   // ex: "FilialEntity" se é FK, null se campo simples
+        int priority;             // flg_=10, cdg_=5, dcr_=1 (para resolver colisões)
     }
 
     /** FKs conhecidas do projeto Logus → Entity correspondente */
@@ -200,30 +211,38 @@ public class JavaCodeGenerator {
         KNOWN_FK_ENTITIES.put("cdg_depto", "DepartamentoEntity");
     }
 
-    /** Resolve campos: converte nomes técnicos para descritivos seguindo padrão Logus */
+    /** Resolve campos: converte nomes técnicos para descritivos, resolve colisões por prioridade */
     private List<EntityField> resolveEntityFields(DelphiClass dc, List<DfmForm.DatasetField> dfmFields) {
-        List<EntityField> fields = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
+        // Coleta todos os campos com prioridade
+        Map<String, EntityField> byJavaName = new LinkedHashMap<>();
 
         // Tenta do DelphiClass primeiro
         for (DelphiField f : dc.getFields()) {
             if (f.isComponent()) continue;
             EntityField ef = mapToEntityField(f.getName().toLowerCase(), f.getJavaType());
-            if (ef != null && !ef.javaName.equals("id") && seen.add(ef.javaName)) {
-                fields.add(ef);
+            if (ef != null && !ef.javaName.equals("id") && !ef.javaName.isEmpty()) {
+                addOrReplace(byJavaName, ef);
             }
         }
 
         // Fallback: DFM fields
-        if (fields.isEmpty() && dfmFields != null) {
+        if (byJavaName.isEmpty() && dfmFields != null) {
             for (DfmForm.DatasetField df : dfmFields) {
                 EntityField ef = mapToEntityField(df.getName(), df.getDelphiType());
-                if (ef != null && !ef.javaName.equals("id") && seen.add(ef.javaName)) {
-                    fields.add(ef);
+                if (ef != null && !ef.javaName.equals("id") && !ef.javaName.isEmpty()) {
+                    addOrReplace(byJavaName, ef);
                 }
             }
         }
-        return fields;
+        return new ArrayList<>(byJavaName.values());
+    }
+
+    /** Adiciona campo ou substitui se o novo tem prioridade maior (flg_ > dcr_) */
+    private void addOrReplace(Map<String, EntityField> map, EntityField ef) {
+        EntityField existing = map.get(ef.javaName);
+        if (existing == null || ef.priority > existing.priority) {
+            map.put(ef.javaName, ef);
+        }
     }
 
     /** Mapeia um campo Delphi para EntityField com nome descritivo e tipo correto */
@@ -245,6 +264,12 @@ public class JavaCodeGenerator {
             return ef;
         }
 
+        // Prioridade para resolver colisões (flg_ > cdg_ > dcr_)
+        if (colName.startsWith("flg_") || colName.startsWith("flb_")) ef.priority = 10;
+        else if (colName.startsWith("cdg_") || colName.startsWith("nmr_") || colName.startsWith("dat_")) ef.priority = 5;
+        else if (colName.startsWith("dcr_")) ef.priority = 1;
+        else ef.priority = 3;
+
         // Tipo baseado no prefixo + tipo Delphi
         if (colName.startsWith("dat_")) {
             ef.isDate = true;
@@ -252,7 +277,11 @@ public class JavaCodeGenerator {
         } else if (colName.startsWith("flb_")) {
             ef.javaType = "Boolean";
         } else if (colName.startsWith("flg_")) {
-            ef.javaType = "Integer"; // TODO: gerar enum com @Convert
+            ef.isEnum = true;
+            // Gera nome do enum: flg_status_pedido → StatusPedidoEnum
+            String enumSuffix = snakeToCamel(colName.substring(4));
+            ef.enumClassName = capitalize(enumSuffix) + "Enum";
+            ef.javaType = ef.enumClassName;
         } else if (colName.startsWith("qtd_") || colName.startsWith("val_") || colName.startsWith("pct_")) {
             ef.javaType = "BigDecimal";
         } else if (colName.startsWith("cdg_") || colName.startsWith("nmr_")) {
