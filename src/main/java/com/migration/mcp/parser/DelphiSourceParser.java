@@ -35,12 +35,13 @@ public class DelphiSourceParser {
 
     // SQL: .SQL.Text :=  (single assignment)
     private static final Pattern SQL_TEXT_ASSIGN_PATTERN =
-            Pattern.compile("(?i)\\.SQL\\.Text\\s*:=\\s*'([^']+)'", Pattern.MULTILINE);
+            Pattern.compile("(?i)(?:\\.|\\b)SQL\\.Text\\s*:=\\s*'([^']+)'", Pattern.MULTILINE);
 
     // Padrão para encontrar cada linha SQL.Add('...')
     // Em Delphi, strings são delimitadas por ' (aspas simples). " dentro da string é conteúdo normal.
+    // Aceita tanto .SQL.Add (com prefixo objeto) quanto SQL.Add (dentro de with...do)
     private static final Pattern SQL_ADD_LINE_PATTERN =
-            Pattern.compile("(?i)\\.SQL\\.Add\\s*\\(\\s*'([^']*)'\\s*\\)");
+            Pattern.compile("(?i)(?:\\.|\\b)SQL\\.Add\\s*\\(\\s*'([^']*)'\\s*\\)");
 
     private static final Pattern SQL_MULTILINE_PATTERN =
             Pattern.compile("(?i)(?:SELECT|INSERT|UPDATE|DELETE|EXEC|EXECUTE|CALL)\\s+[\\s\\S]{5,500}?(?:FROM|INTO|TABLE|PROC)\\s+\\w+",
@@ -268,7 +269,7 @@ public class DelphiSourceParser {
         {
             // Primeiro encontra posições de SQL.Clear para delimitar blocos
             List<Integer> clearPositions = new ArrayList<>();
-            Matcher clearMatcher = Pattern.compile("(?i)\\.SQL\\.Clear\\s*;").matcher(src);
+            Matcher clearMatcher = Pattern.compile("(?i)(?:\\.|\\b)SQL\\.Clear\\s*;").matcher(src);
             while (clearMatcher.find()) clearPositions.add(clearMatcher.start());
 
             // Coleta todas as linhas SQL.Add com suas posições
