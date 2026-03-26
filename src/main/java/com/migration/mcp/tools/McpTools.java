@@ -947,14 +947,15 @@ generate_migration_plan(
 """;
 
     private static final String TOOLS_REFERENCE = """
-## Referência de Tools (14 tools)
+## Referência de Tools (15 tools)
 
-### Aprendizado
+### Aprendizado e Configuração
 | Tool | Quando usar |
 |------|-------------|
 | `learn_repository` | **Uma vez** no início. Passe o caminho raiz do projeto Delphi. |
 | `get_learned_profile` | Para ver o que foi aprendido (BD, prefixos, módulos). |
 | `clear_learned_profile` | Para trocar de projeto. |
+| `load_target_patterns` | Recarrega entity-patterns.json (após editar sem reiniciar MCP). |
 | `get_usage_guide` | Este manual. Chame para aprender a usar o MCP. |
 
 ### Análise
@@ -970,14 +971,52 @@ generate_migration_plan(
 ### Geração
 | Tool | Input | Output |
 |------|-------|--------|
-| `generate_full_module` | .pas + package | **24 arquivos** Java + Angular + salva em disco |
-| `generate_java_class` | .pas + package | 7 arquivos Java (Entity/Repository/Service/Resource/DTO/VO) |
+| `generate_full_module` | .pas + package | **24+ arquivos** Java + Angular + salva em disco |
+| `generate_java_class` | .pas + package | N entities (master-detail) + Repository/Service/Resource/DTO/VO |
 | `generate_angular_component` | .dfm + .pas | 17 arquivos Angular (Module/Container/Grid/Filtros/Cadastro) |
 | `generate_migration_plan` | lista .pas + .dfm | Plano completo com fases, riscos e estimativas |
 
-### Dica importante
-Todas as tools aceitam `file_path` — passe o caminho absoluto do arquivo.
-O campo `content` é opcional (use apenas se quiser enviar o conteúdo diretamente).
+### Dicas importantes
+- Todas as tools aceitam `file_path` — passe o caminho absoluto do arquivo.
+- O campo `content` é opcional (use apenas se quiser enviar o conteúdo diretamente).
+- `analyze_delphi_unit` tem `include_body: false` (padrão) para output compacto.
+
+## Entity Patterns (entity-patterns.json)
+
+### O que é
+Arquivo JSON externo em `~/.delphi-mcp/entity-patterns.json` com regras extraídas das
+663 entities reais do `logus-corporativo-api`. O MCP lê automaticamente ao iniciar.
+
+### O que contém
+| Seção | Entradas | Função |
+|-------|----------|--------|
+| `columnNameExpansions` | 91 | "cancel" → "cancelamento", "prev" → "previsao" |
+| `knownForeignKeys` | 146 | "cdg_filial" → "FilialEntity" (@ManyToOne) |
+| `stringForeignKeys` | 5 | "cdg_fornecedor" (CNPJ, não é FK de entity) |
+| `knownEnums` | 65 | "flg_status_pedido" → SituacaoPedidoAutomaticoEnum + Converter |
+| `knownTables` | 651 | "estmpedautomatico" → {entity, pk} |
+| `masterDetailRelationships` | 50 | "estdpedautomatico" → master: estmpedautomatico |
+
+### Como funciona
+- **Carregamento automático**: O MCP lê o JSON ao iniciar (`/mcp` para reiniciar).
+- **Recarregar sem reiniciar**: `load_target_patterns()` ou `load_target_patterns(file_path: "caminho")`.
+- **Prioridade**: patterns > heurística. Se o campo não está no JSON, usa a heurística padrão.
+- **Editar o JSON**: Qualquer IA pode editar o JSON para adicionar novos padrões.
+  Depois de editar, rodar `load_target_patterns()` para recarregar.
+
+### Como a geração de Entity usa os patterns
+1. **Nomes**: Consulta `columnNameExpansions` primeiro. Ex: "canc_pend_auto" → "cancelaPendenciaAutomatica"
+2. **FKs**: Consulta `knownForeignKeys`. Ex: "cdg_filial" → `@ManyToOne FilialEntity filial`
+3. **Enums**: Consulta `knownEnums`. Ex: "flg_status_pedido" → `@Convert(converter = SituacaoPedidoAutomaticoConverter.class)`
+4. **Tabelas**: Consulta `knownTables` para `@Table(name)` e PK.
+5. **Master-detail**: Consulta `masterDetailRelationships` para separar em N entities.
+
+### Fluxo de melhoria iterativa
+1. Rodar `generate_java_class` para uma tela
+2. Comparar entity gerada vs entity real
+3. Se encontrou gap, editar `~/.delphi-mcp/entity-patterns.json`
+4. `load_target_patterns()` para recarregar
+5. Testar novamente — o output melhora sem recompilar o MCP
 
 """;
 
