@@ -28,7 +28,7 @@ public class AngularCodeGenerator {
         files.put(kebab + "/" + kebab + ".module.ts", genModule(baseName, kebab));
         files.put(kebab + "/" + kebab + ".routing.ts", genRouting(baseName, kebab));
         files.put(kebab + "/models/" + kebab + ".model.ts", genModel(baseName, dc, form));
-        files.put(kebab + "/models/pesquisa-" + kebab + ".model.ts", genPesquisaModel(baseName, dc));
+        files.put(kebab + "/models/pesquisa-" + kebab + ".model.ts", genPesquisaModel(baseName, dc, form));
         files.put(kebab + "/services/" + kebab + ".service.ts", genService(baseName, kebab, dc, form));
         files.put("modules/shared/services/http/http-" + kebab + ".service.ts", genHttpService(baseName, kebab));
         files.put(kebab + "/components/" + kebab + "-container/" + kebab + "-container.component.ts", genContainer(baseName, kebab));
@@ -90,11 +90,12 @@ public class AngularCodeGenerator {
 
     private String genModel(String name, DelphiClass dc, DfmForm form) {
         String pascal = toPascalCase(name);
+        List<ResolvedField> fields = resolveFields(dc, form);
         StringBuilder sb = new StringBuilder();
         sb.append("export interface ").append(pascal).append("Model {\n");
         sb.append("  id: number;\n");
-        for (DelphiField f : nonComponentFields(dc)) {
-            sb.append("  ").append(toCamelCase(removePrefix(f.getName()))).append(": ").append(tsType(f)).append(";\n");
+        for (ResolvedField f : fields) {
+            sb.append("  ").append(f.camelName).append(": ").append(f.tsType).append(";\n");
         }
         sb.append("  isEdicao?: boolean;\n");
         sb.append("}\n");
@@ -102,12 +103,17 @@ public class AngularCodeGenerator {
     }
 
     private String genPesquisaModel(String name, DelphiClass dc) {
+        return genPesquisaModel(name, dc, null);
+    }
+
+    private String genPesquisaModel(String name, DelphiClass dc, DfmForm form) {
         String pascal = toPascalCase(name);
+        List<ResolvedField> fields = resolveFields(dc, form);
         StringBuilder sb = new StringBuilder();
         sb.append("import { LazyLoadDto } from '@shared/models/lazy-load-dto.model';\n\n");
         sb.append("export interface Pesquisa").append(pascal).append("Model {\n");
-        for (DelphiField f : nonComponentFields(dc)) {
-            sb.append("  ").append(toCamelCase(removePrefix(f.getName()))).append("?: string;\n");
+        for (ResolvedField f : fields) {
+            sb.append("  ").append(f.camelName).append("?: string;\n");
         }
         sb.append("  lazyDto?: LazyLoadDto;\n");
         sb.append("}\n");
@@ -297,13 +303,17 @@ public class AngularCodeGenerator {
 
     private String genGrid(String name, String kebab, DelphiClass dc, DfmForm form) {
         String pascal = toPascalCase(name);
-        List<DelphiField> fields = nonComponentFields(dc);
-        int pct = fields.isEmpty() ? 100 : 100 / fields.size();
+        List<ResolvedField> fields = resolveFields(dc, form);
+        List<DfmForm.GridColumn> gridCols = resolveGridColumns(form, fields);
 
         StringBuilder cols = new StringBuilder();
-        for (DelphiField f : fields) {
-            String field = toCamelCase(removePrefix(f.getName()));
-            cols.append("      { field: '").append(field).append("', header: '").append(removePrefix(f.getName())).append("', width: '").append(pct).append("%' },\n");
+        for (DfmForm.GridColumn gc : gridCols) {
+            String field = snakeToCamel(gc.getField());
+            String header = gc.getHeader();
+            if (gc.getSubHeader() != null && !gc.getSubHeader().isEmpty()) {
+                header = gc.getSubHeader() + " " + header;
+            }
+            cols.append("    { field: '").append(field).append("', header: '").append(header).append("' },\n");
         }
 
         return "import { Component, OnInit, OnDestroy } from '@angular/core';\n" +
@@ -385,12 +395,11 @@ public class AngularCodeGenerator {
 
     private String genFiltros(String name, String kebab, DelphiClass dc, DfmForm form) {
         String pascal = toPascalCase(name);
-        List<DelphiField> fields = nonComponentFields(dc);
+        List<FiltroField> filtros = extractFiltroFields(form);
 
         StringBuilder formControls = new StringBuilder();
-        for (DelphiField f : fields) {
-            String field = toCamelCase(removePrefix(f.getName()));
-            formControls.append("      ").append(field).append(": [''],\n");
+        for (FiltroField f : filtros) {
+            formControls.append("      ").append(f.name).append(": [null],\n");
         }
 
         return "import { Component, OnInit } from '@angular/core';\n" +
@@ -422,20 +431,94 @@ public class AngularCodeGenerator {
     }
 
     private String genFiltrosHtml(String kebab, DelphiClass dc, DfmForm form) {
+        List<FiltroField> filtros = extractFiltroFields(form);
         StringBuilder sb = new StringBuilder();
         sb.append("<app-filtro (onPesquisar)=\"handlePesquisar()\">\n");
         sb.append("  <div class=\"row\">\n");
-        for (DelphiField f : nonComponentFields(dc)) {
-            String field = toCamelCase(removePrefix(f.getName()));
-            String label = removePrefix(f.getName());
-            sb.append("    <div class=\"col-md-4\">\n");
-            sb.append("      <label>").append(label).append("</label>\n");
-            sb.append("      <input pInputText [formControl]=\"form.get('").append(field).append("')\" class=\"form-control\" />\n");
+        for (FiltroField f : filtros) {
+            String colSize = f.type.equals("calendar") ? "col-md-2" : f.type.equals("dropdown") ? "col-md-3" : "col-md-3";
+            sb.append("    <div class=\"").append(colSize).append("\">\n");
+            sb.append("      <label>").append(f.label).append("</label>\n");
+            switch (f.type) {
+                case "dropdown":
+                    sb.append("      <p-dropdown [options]=\"").append(f.name).append("Options\" formControlName=\"")
+                      .append(f.name).append("\" [filter]=\"true\" [showClear]=\"true\" placeholder=\"Selecione...\"></p-dropdown>\n");
+                    break;
+                case "calendar":
+                    sb.append("      <p-calendar formControlName=\"").append(f.name).append("\" dateFormat=\"dd/mm/yy\" [showIcon]=\"true\"></p-calendar>\n");
+                    break;
+                case "checkbox":
+                    sb.append("      <p-checkbox formControlName=\"").append(f.name).append("\" label=\"").append(f.label).append("\"></p-checkbox>\n");
+                    break;
+                default:
+                    sb.append("      <input pInputText formControlName=\"").append(f.name).append("\" class=\"form-control\" />\n");
+                    break;
+            }
             sb.append("    </div>\n");
         }
         sb.append("  </div>\n");
         sb.append("</app-filtro>\n");
         return sb.toString();
+    }
+
+    /** Representa um campo de filtro extraído dos componentes visuais do DFM */
+    private static class FiltroField {
+        String name;   // formControlName
+        String label;  // label do campo
+        String type;   // "input", "dropdown", "calendar", "checkbox"
+        FiltroField(String name, String label, String type) {
+            this.name = name; this.label = label; this.type = type;
+        }
+    }
+
+    /** Extrai campos de filtro dos componentes visuais do DFM */
+    private List<FiltroField> extractFiltroFields(DfmForm form) {
+        List<FiltroField> filtros = new ArrayList<>();
+        if (form == null || form.getComponents() == null) return filtros;
+
+        // Mapeia labels por posição: lblXxx.Caption -> próximo componente
+        Map<String, String> labelCaptions = new LinkedHashMap<>();
+        List<DfmComponent> comps = form.getComponents();
+        for (int i = 0; i < comps.size(); i++) {
+            DfmComponent c = comps.get(i);
+            if (c.getDelphiType().equals("TLabel") && c.getProperties().containsKey("Caption")) {
+                labelCaptions.put(c.getName(), c.getProperties().get("Caption"));
+            }
+        }
+
+        for (DfmComponent c : comps) {
+            String type = c.getDelphiType();
+            String name = toCamelCase(c.getName());
+            String label = findLabelForComponent(c, labelCaptions);
+
+            if (type.contains("LookupCombo") || type.contains("LgCorporativo") || type.contains("DBLookupCombo")) {
+                filtros.add(new FiltroField(name, label, "dropdown"));
+            } else if (type.contains("DateEdit") || type.contains("Calendar")) {
+                filtros.add(new FiltroField(name, label, "calendar"));
+            } else if (type.equals("TEdit") || type.equals("TMaskEdit")) {
+                filtros.add(new FiltroField(name, label, "input"));
+            } else if (type.contains("CheckBox") && !type.contains("DB")) {
+                String cbLabel = c.getProperties().getOrDefault("Caption", c.getName());
+                filtros.add(new FiltroField(name, cbLabel, "checkbox"));
+            }
+        }
+        return filtros;
+    }
+
+    /** Tenta achar o label mais provável para um componente (lblXxx para xxxComponent) */
+    private String findLabelForComponent(DfmComponent comp, Map<String, String> labelCaptions) {
+        String compName = comp.getName().toLowerCase();
+        // Tenta lbl + NomeComponente (ex: lblFilial para lucFilial)
+        for (Map.Entry<String, String> e : labelCaptions.entrySet()) {
+            String lblName = e.getKey().toLowerCase().replace("lbl", "");
+            String cName = compName.replaceAll("^(luc|edt|chk|cbo|cmb)", "");
+            if (!lblName.isEmpty() && !cName.isEmpty() && (lblName.contains(cName) || cName.contains(lblName))) {
+                return e.getValue();
+            }
+        }
+        // Fallback: usa Caption ou nome
+        return comp.getProperties().getOrDefault("Caption",
+               comp.getProperties().getOrDefault("Hint", comp.getName()));
     }
 
     private String genFiltrosModule(String name, String kebab) {
@@ -460,12 +543,11 @@ public class AngularCodeGenerator {
 
     private String genCadastro(String name, String kebab, DelphiClass dc, DfmForm form) {
         String pascal = toPascalCase(name);
-        List<DelphiField> fields = nonComponentFields(dc);
+        List<ResolvedField> fields = resolveFields(dc, form);
 
         StringBuilder formControls = new StringBuilder();
-        for (DelphiField f : fields) {
-            String field = toCamelCase(removePrefix(f.getName()));
-            formControls.append("      ").append(field).append(": [''],\n");
+        for (ResolvedField f : fields) {
+            formControls.append("      ").append(f.camelName).append(": [null],\n");
         }
 
         return "import { Component, OnInit, OnDestroy } from '@angular/core';\n" +
@@ -518,25 +600,24 @@ public class AngularCodeGenerator {
     }
 
     private String genCadastroHtml(String kebab, DelphiClass dc, DfmForm form) {
+        List<ResolvedField> fields = resolveFields(dc, form);
         StringBuilder sb = new StringBuilder();
         sb.append("<div class=\"container-fluid\">\n");
         sb.append("  <form [formGroup]=\"form\">\n");
         sb.append("    <div class=\"row\">\n");
 
-        for (DelphiField f : nonComponentFields(dc)) {
-            String field = toCamelCase(removePrefix(f.getName()));
-            String label = removePrefix(f.getName());
-            String type = f.getDelphiType() != null ? f.getDelphiType().toLowerCase() : "";
-
+        for (ResolvedField f : fields) {
             sb.append("      <div class=\"col-md-4 form-group\">\n");
-            sb.append("        <label>").append(label).append("</label>\n");
+            sb.append("        <label>").append(f.label).append("</label>\n");
 
-            if (type.contains("boolean")) {
-                sb.append("        <p-checkbox formControlName=\"").append(field).append("\" [binary]=\"true\" label=\"").append(label).append("\"></p-checkbox>\n");
-            } else if (type.contains("currency") || type.contains("double") || type.contains("extended")) {
-                sb.append("        <input pInputText formControlName=\"").append(field).append("\" class=\"form-control\" currencyMask />\n");
+            if ("boolean".equals(f.tsType)) {
+                sb.append("        <p-checkbox formControlName=\"").append(f.camelName).append("\" [binary]=\"true\" label=\"").append(f.label).append("\"></p-checkbox>\n");
+            } else if ("BigDecimal".equals(f.javaType)) {
+                sb.append("        <input pInputText formControlName=\"").append(f.camelName).append("\" class=\"form-control\" currencyMask />\n");
+            } else if ("Date".equals(f.javaType)) {
+                sb.append("        <p-calendar formControlName=\"").append(f.camelName).append("\" dateFormat=\"dd/mm/yy\" [showIcon]=\"true\"></p-calendar>\n");
             } else {
-                sb.append("        <input pInputText formControlName=\"").append(field).append("\" class=\"form-control\" />\n");
+                sb.append("        <input pInputText formControlName=\"").append(f.camelName).append("\" class=\"form-control\" />\n");
             }
 
             sb.append("      </div>\n");
@@ -625,5 +706,75 @@ public class AngularCodeGenerator {
     private String toCamelCase(String s) {
         if (s == null || s.isEmpty()) return s;
         return Character.toLowerCase(s.charAt(0)) + s.substring(1);
+    }
+
+    private String snakeToCamel(String s) {
+        if (s == null || s.isEmpty()) return s;
+        StringBuilder sb = new StringBuilder();
+        boolean nextUpper = false;
+        for (char c : s.toCharArray()) {
+            if (c == '_') { nextUpper = true; }
+            else { sb.append(nextUpper ? Character.toUpperCase(c) : c); nextUpper = false; }
+        }
+        if (sb.length() > 0) sb.setCharAt(0, Character.toLowerCase(sb.charAt(0)));
+        return sb.toString();
+    }
+
+    /** Representa um campo resolvido (de DelphiClass ou DfmForm.DatasetField) */
+    private static class ResolvedField {
+        String camelName;  // cdgPedAuto
+        String label;      // Ped Auto
+        String tsType;     // number
+        String javaType;   // Integer
+        ResolvedField(String camelName, String label, String tsType, String javaType) {
+            this.camelName = camelName; this.label = label; this.tsType = tsType; this.javaType = javaType;
+        }
+    }
+
+    /** Resolve campos: primeiro tenta DelphiClass, se vazio usa DFM datasetFields */
+    private List<ResolvedField> resolveFields(DelphiClass dc, DfmForm form) {
+        List<ResolvedField> fields = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+
+        // Tenta DelphiClass
+        for (DelphiField f : nonComponentFields(dc)) {
+            String name = toCamelCase(removePrefix(f.getName()));
+            if (!name.isEmpty() && !name.equals("id") && seen.add(name)) {
+                fields.add(new ResolvedField(name, removePrefix(f.getName()), tsType(f), f.getJavaType()));
+            }
+        }
+
+        // Fallback: DFM datasetFields
+        if (fields.isEmpty() && form != null && form.getDatasetFields() != null) {
+            for (DfmForm.DatasetField df : form.getDatasetFields()) {
+                String name = snakeToCamel(df.getName());
+                if (!name.isEmpty() && !name.equals("id") && seen.add(name)) {
+                    String label = df.getName().replaceAll("^(cdg_|dcr_|nmr_|dat_|flg_|flb_|qtd_|val_)", "")
+                                              .replace("_", " ");
+                    // Capitaliza cada palavra
+                    String[] words = label.split(" ");
+                    StringBuilder lb = new StringBuilder();
+                    for (String w : words) {
+                        if (!w.isEmpty()) lb.append(lb.length() > 0 ? " " : "")
+                                           .append(Character.toUpperCase(w.charAt(0))).append(w.substring(1));
+                    }
+                    fields.add(new ResolvedField(name, lb.toString(), df.getTsType(), df.getJavaType()));
+                }
+            }
+        }
+        return fields;
+    }
+
+    /** Resolve colunas do grid: primeiro tenta gridColumns do DFM, senão usa campos */
+    private List<DfmForm.GridColumn> resolveGridColumns(DfmForm form, List<ResolvedField> fields) {
+        if (form != null && form.getGridColumns() != null && !form.getGridColumns().isEmpty()) {
+            return form.getGridColumns();
+        }
+        // Fallback: cria colunas a partir dos campos
+        List<DfmForm.GridColumn> cols = new ArrayList<>();
+        for (ResolvedField f : fields) {
+            cols.add(new DfmForm.GridColumn(f.camelName, f.label, "", 10));
+        }
+        return cols;
     }
 }
