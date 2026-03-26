@@ -106,18 +106,29 @@ public class JavaCodeGenerator {
         // Fix 5: usar entityClassName passado (para detail entities)
         String entityClass = entityClassName != null ? entityClassName + "Entity" : baseName + "Entity";
 
-        // Fix 1: consultar knownTables para @Table(name)
-        if (tableName == null || tableName.isBlank()) {
+        // Fix 1: SEMPRE consultar knownTables para @Table(name) — mesmo se tableName foi passado
+        {
             TargetPatterns tp = patterns();
             if (tp != null) {
-                // Procura tabela correspondente ao baseName no knownTables
+                String lookupName = entityClassName != null ? entityClassName : baseName;
+                String found = null;
+                // Busca pelo entityClass no knownTables (match exato ou parcial)
                 for (Map.Entry<String, TargetPatterns.TablePattern> e : tp.getKnownTables().entrySet()) {
-                    if (e.getValue().getEntity() != null &&
-                        e.getValue().getEntity().replace("Entity", "").equalsIgnoreCase(baseName)) {
-                        tableName = e.getKey();
-                        break;
+                    if (e.getValue().getEntity() != null) {
+                        String eName = e.getValue().getEntity().replace("Entity", "");
+                        // Match exato
+                        if (eName.equalsIgnoreCase(lookupName) || eName.equalsIgnoreCase(baseName)) {
+                            found = e.getKey();
+                            break;
+                        }
+                        // Match parcial: "ItemManutencaoPedidoAutomatico" contém "ItemPedidoAutomatico"
+                        if (lookupName.toLowerCase().contains(eName.toLowerCase()) && eName.length() > 5) {
+                            found = e.getKey();
+                            // Não break — pode ter match melhor
+                        }
                     }
                 }
+                if (found != null) tableName = found;
             }
             if (tableName == null || tableName.isBlank()) {
                 tableName = toTableName(baseName).toLowerCase();
@@ -296,12 +307,14 @@ public class JavaCodeGenerator {
             return ef;
         }
 
-        // @ManyToOne: primeiro tenta patterns, depois fallback KNOWN_FK_ENTITIES
+        // @ManyToOne: somente para campos cdg_* (códigos são FKs, nmr_ não)
         String fkEntity = null;
-        if (tp != null && tp.getKnownForeignKeys().containsKey(colName)) {
-            fkEntity = tp.getKnownForeignKeys().get(colName);
-        } else if (KNOWN_FK_ENTITIES.containsKey(colName)) {
-            fkEntity = KNOWN_FK_ENTITIES.get(colName);
+        if (colName.startsWith("cdg_")) {
+            if (tp != null && tp.getKnownForeignKeys().containsKey(colName)) {
+                fkEntity = tp.getKnownForeignKeys().get(colName);
+            } else if (KNOWN_FK_ENTITIES.containsKey(colName)) {
+                fkEntity = KNOWN_FK_ENTITIES.get(colName);
+            }
         }
         if (fkEntity != null) {
             ef.manyToOneEntity = fkEntity;
