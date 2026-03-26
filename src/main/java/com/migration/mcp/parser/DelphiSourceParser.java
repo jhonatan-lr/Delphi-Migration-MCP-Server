@@ -425,7 +425,15 @@ public class DelphiSourceParser {
         }
         if (sql.length() > 0) {
             String note = null;
-            if (!branchCuts.isEmpty()) {
+            // Detecta branches: via branchCuts ou via SQL duplicada (mesmo SELECT aparece 2+ vezes)
+            boolean hasBranch = !branchCuts.isEmpty();
+            if (!hasBranch) {
+                // Heurística: se o SQL tem SELECT/FROM/JOIN duplicado, provavelmente tem branches
+                String upper = sql.toString().toUpperCase();
+                int selectCount = countOccurrences(upper, " FROM ");
+                if (selectCount >= 2) hasBranch = true;
+            }
+            if (hasBranch) {
                 String condText = ifCondition != null
                         ? "if (" + ifCondition + ")"
                         : "condição detectada";
@@ -957,5 +965,11 @@ public class DelphiSourceParser {
 
     private String toKebabCase(String s) {
         return s.replaceAll("([A-Z])", "-$1").toLowerCase().replaceAll("^-", "");
+    }
+
+    private int countOccurrences(String text, String sub) {
+        int count = 0, idx = 0;
+        while ((idx = text.indexOf(sub, idx)) != -1) { count++; idx += sub.length(); }
+        return count;
     }
 }
