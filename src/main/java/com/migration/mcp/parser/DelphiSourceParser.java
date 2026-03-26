@@ -379,24 +379,126 @@ public class DelphiSourceParser {
     private String suggestJpa(String sql) {
         String type = detectQueryType(sql);
         List<String> tables = extractTables(sql);
-        String entity = tables.isEmpty() ? "Entity" : toPascalCase(tables.get(0));
-        return switch (type) {
-            case "SELECT" -> "@Query(\"SELECT e FROM " + entity + " e WHERE ...\")\nList<" + entity + "> findBy...();";
-            case "INSERT" -> "repository.save(new " + entity + "(...));";
-            case "UPDATE" -> "repository.save(existing" + entity + ");";
-            case "DELETE" -> "repository.deleteById(id);";
-            default -> "// Stored procedure → @Procedure(\"proc_name\")";
-        };
+        String mainTable = tables.isEmpty() ? "Entity" : toPascalCase(tables.get(0));
+
+        // Extrai parâmetros (:param_name)
+        List<String> params = new ArrayList<>();
+        Matcher pm = Pattern.compile(":(\\w+)").matcher(sql);
+        while (pm.find()) {
+            String p = pm.group(1);
+            if (!params.contains(p)) params.add(p);
+        }
+
+        // Extrai colunas do SELECT
+        List<String> selectCols = new ArrayList<>();
+        Matcher colM = Pattern.compile("(?i)select\\s+(.+?)\\s+from", Pattern.DOTALL).matcher(sql);
+        if (colM.find()) {
+            String colStr = colM.group(1).replaceAll("\\s+", " ").trim();
+            if (!colStr.equals("*") && colStr.length() < 200) {
+                // Simplifica: pega os aliases ou nomes de campo
+                for (String part : colStr.split(",")) {
+                    String col = part.trim();
+                    // Pega alias se existir (xxx as alias, ou xxx alias)
+                    Matcher aliasM = Pattern.compile("(?i)(?:as\\s+)?(\\w+)\\s*$").matcher(col);
+                    if (aliasM.find()) selectCols.add(aliasM.group(1));
+                }
+            }
+        }
+
+        // Extrai JOINs
+        List<String> joins = new ArrayList<>();
+        Matcher jm = Pattern.compile("(?i)((?:inner|left|right|outer)?\\s*join)\\s+(\\w+)\\s+(\\w+)?\\s+on\\s+([^\\s]+\\s*=\\s*[^\\s]+)").matcher(sql);
+        while (jm.find()) {
+            joins.add(jm.group(2)); // tabela do join
+        }
+
+        StringBuilder jpa = new StringBuilder();
+
+        switch (type) {
+            case "SELECT" -> {
+                // Gera @Query nativeQuery com a SQL original simplificada
+                jpa.append("// Opção 1: Native Query\n");
+                jpa.append("@Query(value = \"").append(sql.length() > 300 ? sql.substring(0, 300) + "...\"" : sql + "\"");
+                jpa.append(",\n       nativeQuery = true)\n");
+
+                // Params
+                String paramsStr = params.stream()
+                        .map(p -> "@Param(\"" + p + "\") " + guessParamType(p) + " " + snakeToCamel(p))
+                        .collect(java.util.stream.Collectors.joining(", "));
+                jpa.append("List<Object[]> findBy(").append(paramsStr).append(");\n\n");
+
+                // Opção 2: JPQL
+                jpa.append("// Opção 2: JPQL (requer @Entity mapeada)\n");
+                jpa.append("@Query(\"SELECT e FROM ").append(mainTable).append("Entity e");
+                if (!params.isEmpty()) {
+                    jpa.append(" WHERE ");
+                    jpa.append(params.stream()
+                            .map(p -> "e." + snakeToCamel(p) + " = :" + p)
+                            .collect(java.util.stream.Collectors.joining(" AND ")));
+                }
+                jpa.append("\")\n");
+                jpa.append("List<").append(mainTable).append("Entity> findBy");
+                jpa.append(params.stream().map(p -> toPascalCase(snakeToCamel(p))).collect(java.util.stream.Collectors.joining("And")));
+                jpa.append("(").append(paramsStr).append(");");
+
+                if (!joins.isEmpty()) {
+                    jpa.append("\n\n// JOINs detectados: ").append(String.join(", ", joins));
+                    jpa.append("\n// Considerar @ManyToOne / @OneToMany nas entidades");
+                }
+            }
+            case "INSERT" -> jpa.append("repository.save(new ").append(mainTable).append("Entity(...));");
+            case "UPDATE" -> jpa.append("repository.save(existing").append(mainTable).append(");");
+            case "DELETE" -> jpa.append("repository.deleteById(id);");
+            default -> jpa.append("@Procedure(name = \"").append(mainTable).append("\")\nvoid execute(...);\n// Avaliar mover lógica para Java");
+        }
+        return jpa.toString();
+    }
+
+    private String guessParamType(String paramName) {
+        String lower = paramName.toLowerCase();
+        if (lower.startsWith("dat_") || lower.contains("date")) return "Date";
+        if (lower.startsWith("cdg_") || lower.startsWith("nmr_") || lower.startsWith("id")) return "Integer";
+        if (lower.startsWith("flg_") || lower.startsWith("flb_")) return "String";
+        if (lower.startsWith("val_") || lower.startsWith("qtd_")) return "BigDecimal";
+        return "String";
+    }
+
+    private String snakeToCamel(String s) {
+        if (s == null || s.isEmpty()) return s;
+        StringBuilder sb = new StringBuilder();
+        boolean nextUpper = false;
+        for (char c : s.toCharArray()) {
+            if (c == '_') { nextUpper = true; }
+            else { sb.append(nextUpper ? Character.toUpperCase(c) : c); nextUpper = false; }
+        }
+        if (sb.length() > 0) sb.setCharAt(0, Character.toLowerCase(sb.charAt(0)));
+        return sb.toString();
     }
 
     private String suggestRepositoryMethod(String sql) {
         List<String> tables = extractTables(sql);
         String entity = tables.isEmpty() ? "Entity" : toPascalCase(tables.get(0));
         String type = detectQueryType(sql);
+
+        // Extrai parâmetros
+        List<String> params = new ArrayList<>();
+        Matcher pm = Pattern.compile(":(\\w+)").matcher(sql);
+        while (pm.find()) {
+            String p = pm.group(1);
+            if (!params.contains(p)) params.add(p);
+        }
+
         return switch (type) {
-            case "SELECT" -> "List<" + entity + "> findAll" + entity + "By(...)";
-            case "INSERT", "UPDATE" -> entity + " save(" + entity + " entity)";
-            case "DELETE" -> "void delete" + entity + "ById(Long id)";
+            case "SELECT" -> {
+                String methodName = "findAll" + entity + "By" +
+                        params.stream().map(p -> toPascalCase(snakeToCamel(p))).collect(java.util.stream.Collectors.joining("And"));
+                String paramsStr = params.stream()
+                        .map(p -> guessParamType(p) + " " + snakeToCamel(p))
+                        .collect(java.util.stream.Collectors.joining(", "));
+                yield "List<" + entity + "Entity> " + methodName + "(" + paramsStr + ")";
+            }
+            case "INSERT", "UPDATE" -> entity + "Entity save(" + entity + "Entity entity)";
+            case "DELETE" -> "void delete" + entity + "ById(Integer id)";
             default -> "void execute" + entity + "Procedure(...)";
         };
     }
