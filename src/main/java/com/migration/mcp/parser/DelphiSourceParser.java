@@ -249,98 +249,132 @@ public class DelphiSourceParser {
         return procs;
     }
 
-    // ── SQL Extraction ───────────────────────────────────────────────────────
+    // ── SQL Extraction (stateful parser) ────────────────────────────────────
 
+    /**
+     * Parser stateful de SQL em código Delphi.
+     *
+     * Estratégia:
+     * 1. Encontra cada início de bloco SQL: SQL.Clear ou primeiro SQL.Add/SQL.Text
+     * 2. Encontra o fim do bloco: Open, ExecSQL, ExecProc, Close, ou próximo SQL.Clear
+     * 3. Dentro do range [início, fim], extrai TODOS os SQL.Add('...') — incluindo
+     *    os que estão dentro de if/then/else (SQL dinâmico condicional)
+     * 4. Concatena tudo numa única query limpa
+     *
+     * Isso resolve o problema de SQL.Add dentro de blocos condicionais.
+     */
     public List<SqlQuery> extractSqlQueries(String src) {
         List<SqlQuery> queries = new ArrayList<>();
         Set<String> seen = new HashSet<>();
         int idx = 0;
 
-        // 1. SQL.Text := '...'
+        // ── Fase 1: SQL.Text := '...' (atribuição direta) ──
         Matcher m1 = SQL_TEXT_ASSIGN_PATTERN.matcher(src);
         while (m1.find()) {
             String sql = m1.group(1);
-            if (sql != null && sql.trim().length() > 5 && seen.add(sql.trim().substring(0, Math.min(40, sql.trim().length())))) {
-                queries.add(buildSqlQuery(sql.trim(), idx++, src, m1.start()));
+            if (sql != null && sql.trim().length() > 5) {
+                String key = sql.trim().substring(0, Math.min(40, sql.trim().length()));
+                if (seen.add(key)) {
+                    queries.add(buildSqlQuery(sql.trim(), idx++, src, m1.start()));
+                }
             }
         }
 
-        // 2. SQL.Add('...') — coleta todas as linhas SQL.Add e agrupa por bloco (separado por SQL.Clear)
-        {
-            // Primeiro encontra posições de SQL.Clear para delimitar blocos
-            List<Integer> clearPositions = new ArrayList<>();
-            Matcher clearMatcher = Pattern.compile("(?i)(?:\\.|\\b)SQL\\.Clear\\s*;").matcher(src);
-            while (clearMatcher.find()) clearPositions.add(clearMatcher.start());
+        // ── Fase 2: Blocos SQL.Clear ... SQL.Add ... Open/ExecSQL ──
+        // Encontra todos os marcadores
+        List<int[]> markers = new ArrayList<>(); // [posição, tipo] tipo: 0=Clear, 1=Add, 2=Open/Exec
 
-            // Coleta todas as linhas SQL.Add com suas posições
-            Matcher addMatcher = SQL_ADD_LINE_PATTERN.matcher(src);
-            List<int[]> addPositions = new ArrayList<>();  // [pos, groupStart]
-            List<String> addContents = new ArrayList<>();
-            while (addMatcher.find()) {
-                addPositions.add(new int[]{addMatcher.start(), addMatcher.end()});
-                addContents.add(addMatcher.group(1));
-            }
+        // Marcadores de início (SQL.Clear)
+        Matcher clearM = Pattern.compile("(?i)(?:\\.|\\b)SQL\\.Clear\\b").matcher(src);
+        while (clearM.find()) markers.add(new int[]{clearM.start(), 0});
 
-            if (!addPositions.isEmpty()) {
-                // Agrupa SQL.Add consecutivos (mesmo bloco: entre SQL.Clear ou gap > 500 chars)
-                List<List<String>> blocks = new ArrayList<>();
-                List<Integer> blockStarts = new ArrayList<>();
-                List<String> currentBlock = new ArrayList<>();
-                int lastEnd = -1;
+        // Marcadores de conteúdo (SQL.Add)
+        Matcher addM = SQL_ADD_LINE_PATTERN.matcher(src);
+        while (addM.find()) markers.add(new int[]{addM.start(), 1});
 
-                for (int i = 0; i < addPositions.size(); i++) {
-                    int pos = addPositions.get(i)[0];
-                    boolean newBlock = false;
+        // Marcadores de fim (Open, ExecSQL, ExecProc)
+        Matcher endM = Pattern.compile("(?i)(?:\\.|\\b)(?:Open|ExecSQL|ExecProc)\\b").matcher(src);
+        while (endM.find()) markers.add(new int[]{endM.start(), 2});
 
-                    // Novo bloco se: primeiro item, ou há um SQL.Clear entre o último Add e este
-                    if (currentBlock.isEmpty()) {
-                        newBlock = true;
-                    } else {
-                        for (int cp : clearPositions) {
-                            if (cp > lastEnd && cp < pos) { newBlock = true; break; }
+        // Ordena por posição
+        markers.sort((a, b) -> Integer.compare(a[0], b[0]));
+
+        // Agrupa: de cada Clear (ou primeiro Add) até o próximo Open/Exec
+        int state = 0; // 0=fora, 1=dentro de bloco SQL
+        int blockStart = -1;
+        int blockEnd = -1;
+
+        for (int i = 0; i < markers.size(); i++) {
+            int pos = markers.get(i)[0];
+            int type = markers.get(i)[1];
+
+            if (type == 0) { // SQL.Clear → início de bloco
+                // Se havia um bloco anterior sem Open, finaliza ele
+                if (state == 1 && blockStart >= 0) {
+                    String sql = extractSqlFromRange(src, blockStart, pos);
+                    if (sql != null && sql.length() > 5) {
+                        String key = sql.substring(0, Math.min(40, sql.length()));
+                        if (seen.add(key)) {
+                            queries.add(buildSqlQuery(sql, idx++, src, blockStart));
                         }
-                        // Ou se o gap é grande demais (provável método diferente)
-                        if (pos - lastEnd > 500) newBlock = true;
-                    }
-
-                    if (newBlock && !currentBlock.isEmpty()) {
-                        blocks.add(currentBlock);
-                        currentBlock = new ArrayList<>();
-                    }
-                    if (currentBlock.isEmpty()) {
-                        blockStarts.add(pos);
-                    }
-                    currentBlock.add(addContents.get(i));
-                    lastEnd = addPositions.get(i)[1];
-                }
-                if (!currentBlock.isEmpty()) blocks.add(currentBlock);
-
-                // Monta cada bloco como uma query
-                for (int b = 0; b < blocks.size(); b++) {
-                    StringBuilder sb = new StringBuilder();
-                    for (String line : blocks.get(b)) {
-                        if (sb.length() > 0) sb.append(" ");
-                        sb.append(line.trim());
-                    }
-                    String sql = sb.toString().trim();
-                    if (sql.length() > 5 && seen.add(sql.substring(0, Math.min(40, sql.length())))) {
-                        queries.add(buildSqlQuery(sql, idx++, src, blockStarts.get(b)));
                     }
                 }
+                blockStart = pos;
+                state = 1;
+            } else if (type == 1 && state == 0) { // SQL.Add sem Clear anterior → início implícito
+                blockStart = pos;
+                state = 1;
+            } else if (type == 2 && state == 1) { // Open/ExecSQL → fim do bloco
+                blockEnd = pos;
+                String sql = extractSqlFromRange(src, blockStart, blockEnd);
+                if (sql != null && sql.length() > 5) {
+                    String key = sql.substring(0, Math.min(40, sql.length()));
+                    if (seen.add(key)) {
+                        queries.add(buildSqlQuery(sql, idx++, src, blockStart));
+                    }
+                }
+                state = 0;
+                blockStart = -1;
             }
         }
 
-        // 3. SQL multi-linha inline (SELECT...FROM, INSERT...INTO, etc.)
-        Matcher m3 = SQL_MULTILINE_PATTERN.matcher(src);
-        while (m3.find()) {
-            String sql = m3.group(0).trim();
-            if (!seen.contains(sql.substring(0, Math.min(40, sql.length())))) {
-                seen.add(sql.substring(0, Math.min(40, sql.length())));
-                queries.add(buildSqlQuery(sql, idx++, src, m3.start()));
+        // Bloco final sem Open (pode acontecer)
+        if (state == 1 && blockStart >= 0) {
+            String sql = extractSqlFromRange(src, blockStart, src.length());
+            if (sql != null && sql.length() > 5) {
+                String key = sql.substring(0, Math.min(40, sql.length()));
+                if (seen.add(key)) {
+                    queries.add(buildSqlQuery(sql, idx++, src, blockStart));
+                }
             }
         }
 
         return queries;
+    }
+
+    /**
+     * Extrai todos os SQL.Add('...') dentro de um range [start, end] do source.
+     * Isso pega SQL.Add mesmo dentro de if/then/else.
+     */
+    private String extractSqlFromRange(String src, int start, int end) {
+        String range = src.substring(start, Math.min(end, src.length()));
+        Matcher addM = SQL_ADD_LINE_PATTERN.matcher(range);
+        StringBuilder sql = new StringBuilder();
+        while (addM.find()) {
+            String fragment = addM.group(1);
+            if (fragment != null && !fragment.isBlank()) {
+                if (sql.length() > 0) sql.append(" ");
+                sql.append(fragment.trim());
+            }
+        }
+        // Se não encontrou SQL.Add, tenta SQL.Text :=
+        if (sql.length() == 0) {
+            Matcher textM = SQL_TEXT_ASSIGN_PATTERN.matcher(range);
+            if (textM.find()) {
+                sql.append(textM.group(1).trim());
+            }
+        }
+        return sql.length() > 0 ? sql.toString() : null;
     }
 
     private SqlQuery buildSqlQuery(String sql, int idx, String src, int pos) {
