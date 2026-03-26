@@ -95,7 +95,9 @@ public class DelphiSourceParser {
         unit.setGlobalProcedures(extractGlobalProcedures(cleaned));
 
         // Item 12: Dependências entre forms (chamadas a outros forms)
-        unit.setCalledForms(extractCalledForms(cleaned));
+        List<Map<String, String>> navigations = new ArrayList<>();
+        unit.setCalledForms(extractCalledForms(cleaned, navigations));
+        unit.setFormNavigations(navigations);
 
         log.debug("Parsed unit '{}': {} classes, {} SQL, {} rules, {} called forms",
                 unit.getUnitName(),
@@ -545,31 +547,72 @@ public class DelphiSourceParser {
 
     // ── Called Forms (dependências entre telas) ─────────────────────────────
 
-    private List<String> extractCalledForms(String src) {
+    private List<String> extractCalledForms(String src, List<Map<String, String>> navigations) {
         Set<String> forms = new LinkedHashSet<>();
 
-        // Padrão 1: TfrmXxx.MakeShowModal(...)
-        Matcher m1 = Pattern.compile("(?i)(T\\w+)\\.MakeShowModal").matcher(src);
-        while (m1.find()) forms.add(m1.group(1));
+        // Padrão 1: TfrmXxx.MakeShowModal(...) — com parâmetros
+        Matcher m1 = Pattern.compile("(?i)(T\\w+)\\.MakeShowModal\\s*\\(([^)]*)?\\)").matcher(src);
+        while (m1.find()) {
+            String form = m1.group(1);
+            String params = m1.group(2) != null ? m1.group(2).trim() : "";
+            forms.add(form);
+            Map<String, String> nav = new LinkedHashMap<>();
+            nav.put("target", form);
+            nav.put("method", "MakeShowModal");
+            nav.put("params", params);
+            nav.put("context", extractContext(src, m1.start()));
+            navigations.add(nav);
+        }
 
         // Padrão 2: Application.CreateForm(TfrmXxx, ...)
         Matcher m2 = Pattern.compile("(?i)Application\\.CreateForm\\s*\\(\\s*(T\\w+)").matcher(src);
-        while (m2.find()) forms.add(m2.group(1));
+        while (m2.find()) {
+            forms.add(m2.group(1));
+            Map<String, String> nav = new LinkedHashMap<>();
+            nav.put("target", m2.group(1));
+            nav.put("method", "CreateForm");
+            nav.put("context", extractContext(src, m2.start()));
+            navigations.add(nav);
+        }
 
-        // Padrão 3: TfrmXxx.Create(...)
+        // Padrão 3: TfrmXxx.Create(nil) ... ShowModal
         Matcher m3 = Pattern.compile("(?i)(Tfrm\\w+)\\.Create\\s*\\(").matcher(src);
-        while (m3.find()) forms.add(m3.group(1));
+        while (m3.find()) {
+            forms.add(m3.group(1));
+            // Procura atribuições de propriedade antes do ShowModal (vForm.Prop := valor)
+            String afterCreate = src.substring(m3.end(), Math.min(m3.end() + 500, src.length()));
+            List<String> assignments = new ArrayList<>();
+            Matcher propM = Pattern.compile("(?i)\\w+\\.(\\w+)\\s*:=\\s*([^;]+);").matcher(afterCreate);
+            while (propM.find() && assignments.size() < 5) {
+                assignments.add(propM.group(1) + " := " + propM.group(2).trim());
+            }
+            Map<String, String> nav = new LinkedHashMap<>();
+            nav.put("target", m3.group(1));
+            nav.put("method", "Create+ShowModal");
+            if (!assignments.isEmpty()) {
+                nav.put("paramsPassedBeforeShow", String.join("; ", assignments));
+            }
+            nav.put("context", extractContext(src, m3.start()));
+            navigations.add(nav);
+        }
 
-        // Padrão 4: TfrmXxx.ShowModal / .Show
-        Matcher m4 = Pattern.compile("(?i)(Tfrm\\w+)\\.(?:ShowModal|Show)\\b").matcher(src);
-        while (m4.find()) forms.add(m4.group(1));
-
-        // Padrão 5: Trel/Tdtm/Tfra classes chamadas
-        Matcher m5 = Pattern.compile("(?i)(T(?:rel|dtm|fra)\\w+)\\.(?:Create|MakeShowModal|Imprimir|Execute)").matcher(src);
-        while (m5.find()) forms.add(m5.group(1));
+        // Padrão 4: Trel*.Imprimir(...)
+        Matcher m5 = Pattern.compile("(?i)(T(?:rel|dtm|fra)\\w+)\\.(?:Imprimir|Execute|Create|MakeShowModal)\\s*\\(([^)]*)?\\)").matcher(src);
+        while (m5.find()) {
+            String form = m5.group(1);
+            String params = m5.group(2) != null ? m5.group(2).trim() : "";
+            forms.add(form);
+            Map<String, String> nav = new LinkedHashMap<>();
+            nav.put("target", form);
+            nav.put("method", m5.group(0).replaceAll("(?i)^T\\w+\\.", "").replaceAll("\\(.*", ""));
+            nav.put("params", params);
+            nav.put("context", extractContext(src, m5.start()));
+            navigations.add(nav);
+        }
 
         // Remove a própria classe (self references)
         forms.removeIf(f -> src.contains(f + " = class"));
+        navigations.removeIf(n -> src.contains(n.get("target") + " = class"));
 
         return new ArrayList<>(forms);
     }

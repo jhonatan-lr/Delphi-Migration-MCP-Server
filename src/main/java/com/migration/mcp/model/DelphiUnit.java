@@ -3,6 +3,7 @@ package com.migration.mcp.model;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Representa uma Unit Delphi analisada
@@ -23,6 +24,9 @@ public class DelphiUnit {
 
     /** Forms/telas chamados a partir desta unit (MakeShowModal, ShowModal, Create) */
     private List<String> calledForms = new ArrayList<>();
+
+    /** Navegação detalhada entre forms: tipo de chamada, parâmetros passados, contexto */
+    private List<Map<String, String>> formNavigations = new ArrayList<>();
 
     // getters e setters
     public String getUnitName() { return unitName; }
@@ -57,4 +61,7 @@ public class DelphiUnit {
 
     public List<String> getCalledForms() { return calledForms; }
     public void setCalledForms(List<String> calledForms) { this.calledForms = calledForms; }
+
+    public List<Map<String, String>> getFormNavigations() { return formNavigations; }
+    public void setFormNavigations(List<Map<String, String>> formNavigations) { this.formNavigations = formNavigations; }
 }
