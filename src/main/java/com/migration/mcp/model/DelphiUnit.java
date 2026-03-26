@@ -21,6 +21,9 @@ public class DelphiUnit {
     private List<BusinessRule> businessRules = new ArrayList<>();
     private String rawContent;
 
+    /** Forms/telas chamados a partir desta unit (MakeShowModal, ShowModal, Create) */
+    private List<String> calledForms = new ArrayList<>();
+
     // getters e setters
     public String getUnitName() { return unitName; }
     public void setUnitName(String unitName) { this.unitName = unitName; }
@@ -51,4 +54,7 @@ public class DelphiUnit {
 
     public String getRawContent() { return rawContent; }
     public void setRawContent(String rawContent) { this.rawContent = rawContent; }
+
+    public List<String> getCalledForms() { return calledForms; }
+    public void setCalledForms(List<String> calledForms) { this.calledForms = calledForms; }
 }

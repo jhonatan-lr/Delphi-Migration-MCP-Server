@@ -92,11 +92,15 @@ public class DelphiSourceParser {
         // Global procedures
         unit.setGlobalProcedures(extractGlobalProcedures(cleaned));
 
-        log.debug("Parsed unit '{}': {} classes, {} SQL, {} rules",
+        // Item 12: Dependências entre forms (chamadas a outros forms)
+        unit.setCalledForms(extractCalledForms(cleaned));
+
+        log.debug("Parsed unit '{}': {} classes, {} SQL, {} rules, {} called forms",
                 unit.getUnitName(),
                 unit.getClasses().size(),
                 unit.getSqlQueries().size(),
-                unit.getBusinessRules().size());
+                unit.getBusinessRules().size(),
+                unit.getCalledForms().size());
 
         return unit;
     }
@@ -501,6 +505,37 @@ public class DelphiSourceParser {
             case "DELETE" -> "void delete" + entity + "ById(Integer id)";
             default -> "void execute" + entity + "Procedure(...)";
         };
+    }
+
+    // ── Called Forms (dependências entre telas) ─────────────────────────────
+
+    private List<String> extractCalledForms(String src) {
+        Set<String> forms = new LinkedHashSet<>();
+
+        // Padrão 1: TfrmXxx.MakeShowModal(...)
+        Matcher m1 = Pattern.compile("(?i)(T\\w+)\\.MakeShowModal").matcher(src);
+        while (m1.find()) forms.add(m1.group(1));
+
+        // Padrão 2: Application.CreateForm(TfrmXxx, ...)
+        Matcher m2 = Pattern.compile("(?i)Application\\.CreateForm\\s*\\(\\s*(T\\w+)").matcher(src);
+        while (m2.find()) forms.add(m2.group(1));
+
+        // Padrão 3: TfrmXxx.Create(...)
+        Matcher m3 = Pattern.compile("(?i)(Tfrm\\w+)\\.Create\\s*\\(").matcher(src);
+        while (m3.find()) forms.add(m3.group(1));
+
+        // Padrão 4: TfrmXxx.ShowModal / .Show
+        Matcher m4 = Pattern.compile("(?i)(Tfrm\\w+)\\.(?:ShowModal|Show)\\b").matcher(src);
+        while (m4.find()) forms.add(m4.group(1));
+
+        // Padrão 5: Trel/Tdtm/Tfra classes chamadas
+        Matcher m5 = Pattern.compile("(?i)(T(?:rel|dtm|fra)\\w+)\\.(?:Create|MakeShowModal|Imprimir|Execute)").matcher(src);
+        while (m5.find()) forms.add(m5.group(1));
+
+        // Remove a própria classe (self references)
+        forms.removeIf(f -> src.contains(f + " = class"));
+
+        return new ArrayList<>(forms);
     }
 
     // ── Business Rules ───────────────────────────────────────────────────────
