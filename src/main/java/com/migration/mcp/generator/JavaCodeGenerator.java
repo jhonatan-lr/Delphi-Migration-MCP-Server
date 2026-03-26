@@ -269,31 +269,73 @@ public class JavaCodeGenerator {
         return ef;
     }
 
+    /** Abreviações comuns no banco Informix/Logus → nome descritivo */
+    private static final Map<String, String> ABBREVIATIONS = new LinkedHashMap<>();
+    static {
+        ABBREVIATIONS.put("ped", "pedido");
+        ABBREVIATIONS.put("auto", "automatico");
+        ABBREVIATIONS.put("cancel", "cancelamento");
+        ABBREVIATIONS.put("canc", "cancelamento");
+        ABBREVIATIONS.put("prev", "previsao");
+        ABBREVIATIONS.put("conf", "confirmacao");
+        ABBREVIATIONS.put("tp", "tipo");
+        ABBREVIATIONS.put("emb", "embalagem");
+        ABBREVIATIONS.put("vnd", "venda");
+        ABBREVIATIONS.put("med", "media");
+        ABBREVIATIONS.put("orig", "original");
+        ABBREVIATIONS.put("pend", "pendencia");
+        ABBREVIATIONS.put("preco", "preco");
+        ABBREVIATIONS.put("forn", "fornecedor");
+        ABBREVIATIONS.put("prod", "produto");
+        ABBREVIATIONS.put("docto", "documento");
+        ABBREVIATIONS.put("lancto", "lancamento");
+        ABBREVIATIONS.put("oper", "operacao");
+        ABBREVIATIONS.put("estq", "estoque");
+        ABBREVIATIONS.put("rec", "recebimento");
+        ABBREVIATIONS.put("pag", "pagamento");
+        ABBREVIATIONS.put("ativ", "atividade");
+        ABBREVIATIONS.put("desc", "desconto");
+        ABBREVIATIONS.put("mov", "movimento");
+        ABBREVIATIONS.put("sist", "sistema");
+    }
+
     /** Converte nome de coluna técnico para nome Java descritivo */
     private String toDescriptiveJavaName(String colName) {
-        // Remove prefixo técnico e expande
-        String name = colName;
-        if (name.startsWith("cdg_")) name = name.substring(4);
-        else if (name.startsWith("dcr_")) name = name.substring(4);
-        else if (name.startsWith("nmr_")) name = "numero" + capitalize(snakeToCamel(name.substring(4)));
-        else if (name.startsWith("dat_")) name = "data" + capitalize(snakeToCamel(name.substring(4)));
-        else if (name.startsWith("qtd_")) name = "quantidade" + capitalize(snakeToCamel(name.substring(4)));
-        else if (name.startsWith("val_")) name = "valor" + capitalize(snakeToCamel(name.substring(4)));
-        else if (name.startsWith("pct_")) name = "percentual" + capitalize(snakeToCamel(name.substring(4)));
-        else if (name.startsWith("flb_")) name = name.substring(4);
-        else if (name.startsWith("flg_")) name = name.substring(4);
-        else if (name.startsWith("sgl_")) name = "sigla" + capitalize(snakeToCamel(name.substring(4)));
+        // Remove prefixo técnico
+        String suffix = colName;
+        String prefix = "";
+        if (suffix.startsWith("cdg_")) suffix = suffix.substring(4);
+        else if (suffix.startsWith("dcr_")) { suffix = suffix.substring(4); }
+        else if (suffix.startsWith("nmr_")) { prefix = "numero"; suffix = suffix.substring(4); }
+        else if (suffix.startsWith("dat_")) { prefix = "data"; suffix = suffix.substring(4); }
+        else if (suffix.startsWith("qtd_")) { prefix = "quantidade"; suffix = suffix.substring(4); }
+        else if (suffix.startsWith("val_")) { prefix = "valor"; suffix = suffix.substring(4); }
+        else if (suffix.startsWith("pct_")) { prefix = "percentual"; suffix = suffix.substring(4); }
+        else if (suffix.startsWith("flb_")) suffix = suffix.substring(4);
+        else if (suffix.startsWith("flg_")) suffix = suffix.substring(4);
+        else if (suffix.startsWith("sgl_")) { prefix = "sigla"; suffix = suffix.substring(4); }
 
-        // Se não removeu prefixo, faz snakeToCamel direto
-        if (name.equals(colName)) {
-            return snakeToCamel(name);
+        // Se não removeu nada, retorna snakeToCamel
+        if (suffix.equals(colName)) return snakeToCamel(colName);
+
+        // Expande abreviações em cada parte do snake_case
+        String[] parts = suffix.split("_");
+        StringBuilder expanded = new StringBuilder();
+        for (String part : parts) {
+            if (part.isEmpty()) continue;
+            String exp = ABBREVIATIONS.getOrDefault(part.toLowerCase(), part);
+            expanded.append(capitalize(exp));
         }
-        // Se já tem capitalize no meio (ex: "numero" + "PedidoCompra"), retorna
-        if (name.contains("numero") || name.contains("data") || name.contains("quantidade") ||
-            name.contains("valor") || name.contains("percentual") || name.contains("sigla")) {
-            return name;
+
+        if (!prefix.isEmpty()) {
+            return prefix + expanded;
         }
-        return snakeToCamel(name);
+        // Primeiro char lowercase
+        String result = expanded.toString();
+        if (!result.isEmpty()) {
+            result = Character.toLowerCase(result.charAt(0)) + result.substring(1);
+        }
+        return result;
     }
 
     /** Detecta a coluna PK baseado no nome da tabela e campos disponíveis */
