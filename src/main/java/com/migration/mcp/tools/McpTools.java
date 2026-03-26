@@ -963,5 +963,42 @@ generate_angular_component(
 )
 ```
 
+## Limitações Conhecidas (revisão manual necessária)
+
+### SQL Extraction
+- **SQL dinâmico com if/else**: Quando métodos auxiliares adicionam SQL.Add condicionalmente
+  (ex: AdicionarSQLProgramacaoPreco), os dois branches ficam concatenados na mesma query.
+  O campo `conditionalBranch` anota que há variantes, mas o dev precisa separar manualmente.
+- **"condição detectada" genérica**: ~15% dos conditionalBranch não conseguem extrair a condição
+  real do `if`. Isso acontece quando: código comentado com `{== TICKET ==}` contém SELECTs antigos,
+  ou o `if` está num método chamador fora do range analisado.
+- **Queries de métodos auxiliares**: Métodos que só adicionam JOINs/WHEREs (sem SQL.Clear/Open)
+  têm suas linhas agregadas na query do método chamador. A query fica completa mas mistura
+  fragmentos de métodos diferentes.
+
+### Tipos de Dados
+- **TFloatField com prefixo cdg_/nmr_**: Mapeado como Integer (heurística). Correto na maioria
+  dos casos, mas `nmr_docto` (texto concatenado "NF-Serie") é exceção — TStringField tem
+  prioridade e resolve esses casos. Se um campo vier com tipo errado, verifique o tipo
+  original no DFM (TStringField vs TFloatField vs TIntegerField).
+
+### Regras de Negócio
+- **TLogusMessage.Confirm → frontend**: Classificado corretamente como FRONTEND, mas a mensagem
+  extraída pode estar incompleta (cortada na primeira aspa simples).
+- **Cálculos**: Apenas linhas isoladas de atribuição são detectadas. Loops com cálculos
+  acumulados (ex: soma de 6 meses) não são agrupados num bloco lógico.
+
+### Angular Gerado
+- **analyze_dfm_form**: Gera template inline genérico (p-table, p-toolbar). Para código no
+  padrão Logus (app-data-grid, app-filtro, app-button), use `generate_angular_component`
+  que gera 17 arquivos no padrão Container/Grid/Filtros/Cadastro.
+- **Filtros do DFM**: Labels associados a campos são detectados por heurística de nome
+  (lblFilial → lucFilial). Se o label não casar, o campo aparece sem label no HTML.
+
+### Geral
+- **Código gerado é ponto de partida**: Sempre requer revisão manual. Entidades precisam
+  de ajuste de @Column, Services precisam da lógica real, e o Angular precisa de integração
+  com o módulo existente (routing, menu, permissões).
+
 """;
 }
