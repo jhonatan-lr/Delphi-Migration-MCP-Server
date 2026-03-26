@@ -434,17 +434,38 @@ public class DelphiSourceParser {
                 if (selectCount >= 2) hasBranch = true;
             }
             if (hasBranch) {
-                // Se não tem ifCondition do branchCut, busca todos os ifs no range
+                // Se não tem ifCondition do branchCut, busca ifs nos GAPS entre SQL.Adds
                 if (ifCondition == null) {
-                    Pattern allIfs = Pattern.compile("(?i)\\bif\\b\\s*\\(([^)]+)\\)\\s*then\\b");
-                    Matcher allIfM = allIfs.matcher(range);
+                    Pattern ifPat = Pattern.compile("(?i)\\bif\\b\\s*\\(([^)]+)\\)\\s*then\\b");
                     Set<String> conditions = new LinkedHashSet<>();
-                    while (allIfM.find()) {
-                        String cond = allIfM.group(1).trim();
-                        // Ignora condições de UI (Enabled, Visible, etc.)
-                        if (!cond.contains("Enabled") && !cond.contains("Visible") &&
-                            !cond.contains(".State") && cond.length() < 80) {
-                            conditions.add(cond);
+                    // Busca nos gaps entre SQL.Adds consecutivos
+                    for (int i = 0; i < addPositions.size() - 1; i++) {
+                        int gapStart = addPositions.get(i)[1];
+                        int gapEnd = addPositions.get(i + 1)[0];
+                        if (gapEnd > gapStart) {
+                            String gap = range.substring(gapStart, gapEnd);
+                            Matcher gapIfM = ifPat.matcher(gap);
+                            while (gapIfM.find()) {
+                                String cond = gapIfM.group(1).trim();
+                                if (!cond.contains("Enabled") && !cond.contains("Visible") &&
+                                    !cond.contains(".State") && !cond.contains("IsEmpty") &&
+                                    cond.length() < 80) {
+                                    conditions.add(cond);
+                                }
+                            }
+                        }
+                    }
+                    // Também busca antes do primeiro SQL.Add
+                    if (addPositions.get(0)[0] > 0) {
+                        String beforeFirst = range.substring(0, addPositions.get(0)[0]);
+                        Matcher bfM = ifPat.matcher(beforeFirst);
+                        while (bfM.find()) {
+                            String cond = bfM.group(1).trim();
+                            if (!cond.contains("Enabled") && !cond.contains("Visible") &&
+                                !cond.contains(".State") && !cond.contains("IsEmpty") &&
+                                cond.length() < 80) {
+                                conditions.add(cond);
+                            }
                         }
                     }
                     if (!conditions.isEmpty()) {
