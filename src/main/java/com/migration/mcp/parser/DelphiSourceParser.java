@@ -378,15 +378,6 @@ public class DelphiSourceParser {
         // Aceita qualquer conteúdo entre end e else (pode ter ParamByName, comentários, etc.)
         Pattern elsePattern = Pattern.compile("(?si)\\bend\\b.*?\\belse\\b.*?\\bbegin\\b");
 
-        // Também detecta o if que inicia o primeiro branch
-        String beforeFirstAdd = range.substring(0, addPositions.get(0)[0]);
-        Pattern ifPattern = Pattern.compile("(?i)\\bif\\b\\s*\\(([^)]+)\\)\\s*then\\s*\\bbegin\\b");
-        Matcher ifM = ifPattern.matcher(beforeFirstAdd);
-        String ifCondition = null;
-        if (ifM.find()) {
-            ifCondition = ifM.group(1).trim();
-        }
-
         // Encontra pontos de corte (posições de end/else/begin entre SQL.Adds)
         List<Integer> branchCuts = new ArrayList<>();
         for (int i = 0; i < addPositions.size() - 1; i++) {
@@ -394,11 +385,37 @@ public class DelphiSourceParser {
             int gapEnd = addPositions.get(i + 1)[0];
             String gap = range.substring(gapStart, gapEnd);
             if (elsePattern.matcher(gap).find()) {
-                branchCuts.add(i + 1); // corta antes do SQL.Add[i+1]
+                branchCuts.add(i + 1);
             }
         }
 
-        // Junta tudo numa query só (sempre — branches são fragmentos da mesma query)
+        // Se tem branch cut, procura o if ANTES do primeiro SQL.Add do branch
+        String ifCondition = null;
+        if (!branchCuts.isEmpty()) {
+            // Procura o if mais próximo antes do branch cut (olha até 500 chars antes)
+            int firstCutAddIdx = branchCuts.get(0);
+            int searchFrom = firstCutAddIdx > 0 ? addPositions.get(0)[0] : 0;
+            // Procura o if em todo o range antes do primeiro SQL.Add do primeiro branch
+            int firstAddOfBranch = addPositions.get(0)[0];
+            String searchArea = range.substring(0, firstAddOfBranch);
+            Pattern ifPattern = Pattern.compile("(?i)\\bif\\b\\s*\\(([^)]+)\\)\\s*then\\s*\\bbegin\\b");
+            Matcher ifM = ifPattern.matcher(searchArea);
+            // Pega o ÚLTIMO if encontrado (mais próximo do SQL.Add)
+            while (ifM.find()) {
+                ifCondition = ifM.group(1).trim();
+            }
+            // Se não achou antes do primeiro add, procura no range todo
+            if (ifCondition == null) {
+                int cutPos = addPositions.get(branchCuts.get(0))[0];
+                String beforeCut = range.substring(0, cutPos);
+                ifM = ifPattern.matcher(beforeCut);
+                while (ifM.find()) {
+                    ifCondition = ifM.group(1).trim();
+                }
+            }
+        }
+
+        // Junta tudo numa query só (branches são fragmentos da mesma query)
         StringBuilder sql = new StringBuilder();
         for (String content : addContents) {
             if (content != null && !content.isBlank()) {
@@ -408,9 +425,11 @@ public class DelphiSourceParser {
         }
         if (sql.length() > 0) {
             String note = null;
-            if (!branchCuts.isEmpty() && ifCondition != null) {
-                // Anota que a query tem branches condicionais (não separa)
-                note = "Contém branch condicional: if (" + ifCondition + ") — "
+            if (!branchCuts.isEmpty()) {
+                String condText = ifCondition != null
+                        ? "if (" + ifCondition + ")"
+                        : "condição detectada";
+                note = "Contém branch condicional: " + condText + " — "
                      + "variantes no JOIN/WHERE dependendo da condição";
             }
             fragments.add(new SqlFragment(sql.toString(), note));
