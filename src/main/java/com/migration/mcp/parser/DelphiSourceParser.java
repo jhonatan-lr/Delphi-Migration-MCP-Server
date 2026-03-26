@@ -428,10 +428,23 @@ public class DelphiSourceParser {
             // Detecta branches: via branchCuts ou via SQL duplicada (mesmo SELECT aparece 2+ vezes)
             boolean hasBranch = !branchCuts.isEmpty();
             if (!hasBranch) {
-                // Heurística: se o SQL tem SELECT/FROM/JOIN duplicado, provavelmente tem branches
-                String upper = sql.toString().toUpperCase();
-                int selectCount = countOccurrences(upper, " FROM ");
-                if (selectCount >= 2) hasBranch = true;
+                // Heurística: se o SQL tem FROM duplicado, provavelmente tem branches
+                // Remove comentários Delphi { } e // antes de contar (evita falso positivo)
+                String cleanRange = range.replaceAll("(?s)\\{[^}]*\\}", " ")     // remove { ... }
+                                        .replaceAll("(?s)\\(\\*.*?\\*\\)", " ")  // remove (* ... *)
+                                        .replaceAll("//[^\n]*", " ");            // remove // ...
+                // Reconta SQL.Add limpos
+                Matcher cleanAddM = SQL_ADD_LINE_PATTERN.matcher(cleanRange);
+                StringBuilder cleanSql = new StringBuilder();
+                while (cleanAddM.find()) {
+                    if (cleanAddM.group(1) != null && !cleanAddM.group(1).isBlank()) {
+                        if (cleanSql.length() > 0) cleanSql.append(" ");
+                        cleanSql.append(cleanAddM.group(1).trim());
+                    }
+                }
+                String upper = cleanSql.length() > 0 ? cleanSql.toString().toUpperCase() : sql.toString().toUpperCase();
+                int fromCount = countOccurrences(upper, " FROM ");
+                if (fromCount >= 2) hasBranch = true;
             }
             if (hasBranch) {
                 // Se não tem ifCondition do branchCut, busca ifs nos GAPS entre SQL.Adds
