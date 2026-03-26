@@ -453,29 +453,35 @@ public class DelphiSourceParser {
      */
     private List<String> splitGluedQueries(String sql) {
         List<String> queries = new ArrayList<>();
-        // Encontra posições de SELECT/INSERT/UPDATE/DELETE
         Pattern startPattern = Pattern.compile("(?i)\\b(SELECT|INSERT\\s+INTO|UPDATE|DELETE\\s+FROM)\\b");
         Matcher m = startPattern.matcher(sql);
         List<Integer> starts = new ArrayList<>();
         while (m.find()) {
             int pos = m.start();
-            // Verifica se é subselect: precedido por ( ou IN ou EXISTS nos últimos 10 chars
-            if (pos > 0) {
-                String before = sql.substring(Math.max(0, pos - 10), pos).trim();
-                if (before.endsWith("(") || before.toUpperCase().endsWith("IN") ||
-                    before.toUpperCase().endsWith("EXISTS") || before.toUpperCase().endsWith("=")) {
-                    continue; // é subselect, não query nova
-                }
+            if (pos == 0) { starts.add(pos); continue; }
+
+            // Ignora subselects e SELECTs dentro de expressões
+            String before = sql.substring(Math.max(0, pos - 30), pos).trim().toUpperCase();
+            if (before.endsWith("(") || before.endsWith("IN") || before.endsWith("EXISTS") ||
+                before.endsWith("=") || before.endsWith("CASE") || before.endsWith("WHEN") ||
+                before.endsWith("THEN") || before.endsWith("ELSE") || before.endsWith(",") ||
+                before.endsWith("||")) {
+                continue;
             }
-            starts.add(pos);
+
+            // Só aceita como nova query se a anterior contém FROM/INTO/SET (query completa)
+            String preceding = sql.substring(starts.isEmpty() ? 0 : starts.get(starts.size() - 1), pos).toUpperCase();
+            if (preceding.contains(" FROM ") || preceding.contains(" INTO ") || preceding.contains(" SET ")) {
+                starts.add(pos);
+            }
         }
-        if (starts.size() <= 1) return queries; // nada a separar
+        if (starts.size() <= 1) return queries;
 
         for (int i = 0; i < starts.size(); i++) {
             int from = starts.get(i);
             int to = i + 1 < starts.size() ? starts.get(i + 1) : sql.length();
             String part = sql.substring(from, to).trim();
-            if (part.length() > 10) {
+            if (part.length() > 15) {
                 queries.add(part);
             }
         }
