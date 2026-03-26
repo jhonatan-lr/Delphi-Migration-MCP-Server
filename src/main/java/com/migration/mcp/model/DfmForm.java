@@ -63,6 +63,8 @@ public class DfmForm {
 
         private String mapToJava(String fieldName, String dt) {
             if (dt == null) return "String";
+            // Se o tipo Delphi é explicitamente String, respeitar (ex: nmr_docto = "NF-Serie")
+            if (dt.contains("String") || dt.contains("Memo") || dt.contains("Wide")) return "String";
             // Campos com prefixo cdg_ e nmr_ são códigos/números inteiros, mesmo se TFloatField
             if (fieldName != null && (fieldName.startsWith("cdg_") || fieldName.startsWith("nmr_"))) return "Integer";
             if (dt.contains("Integer") || dt.contains("Smallint")) return "Integer";
@@ -74,6 +76,8 @@ public class DfmForm {
 
         private String mapToTs(String fieldName, String dt) {
             if (dt == null) return "string";
+            // Se o tipo Delphi é explicitamente String, respeitar
+            if (dt.contains("String") || dt.contains("Memo") || dt.contains("Wide")) return "string";
             if (fieldName != null && (fieldName.startsWith("cdg_") || fieldName.startsWith("nmr_"))) return "number";
             // Item 6: campos dat_ como Date no TypeScript
             if (fieldName != null && fieldName.startsWith("dat_")) return "Date";

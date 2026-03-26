@@ -697,6 +697,14 @@ public class DelphiSourceParser {
                    "// this.messageService.add({ severity: 'warn', summary: 'Aviso', detail: '" + msg + "' });";
         }
 
+        // Detecta TLogusWinControl (verificação de estado de componente UI)
+        if (cond.contains("TLogusWinControl") || cond.contains("EnabledComponent") ||
+            cond.contains(".Enabled") || cond.contains(".Visible")) {
+            return "// ⚠️ FRONTEND: Verificação de estado de componente UI — não migrar para Service\n" +
+                   "// No Angular: usar [disabled] binding ou *ngIf no template\n" +
+                   "// Condição original: " + cond;
+        }
+
         // Detecta isEmpty (validação real de backend)
         if (cond.contains("IsEmpty") || cond.contains(".IsEmpty")) {
             String entity = cond.replaceAll(".*?(\\w+)\\.IsEmpty.*", "$1");
