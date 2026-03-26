@@ -6,7 +6,7 @@ Gera codigo no padrao exato dos projetos **logus-corporativo-api** (Java 8 / Spr
 
 ---
 
-## Ferramentas disponiveis (12 tools)
+## Ferramentas disponiveis (13 tools)
 
 ### Aprendizado de repositorio
 | Tool | Descricao |
@@ -31,6 +31,7 @@ Gera codigo no padrao exato dos projetos **logus-corporativo-api** (Java 8 / Spr
 | `generate_migration_plan` | Plano completo personalizado para o projeto (JSON + Markdown) |
 | `generate_java_class` | **7 arquivos**: Entity, Repository, Service, Resource, Dto, PesquisaDto, GridVo |
 | `generate_angular_component` | **17 arquivos**: Module, Routing, Container, Grid, Filtros, Cadastro, Service, HttpService, Models |
+| `generate_full_module` | **24 arquivos** de uma vez (7 Java + 17 Angular) com opcao de salvar em disco (`output_dir`) |
 
 ---
 
