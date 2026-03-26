@@ -14,6 +14,7 @@ public class SqlQuery {
     private List<String> tablesUsed = new ArrayList<>();
     private String jpaEquivalent;   // sugestão de JPA/JPQL equivalente
     private String repositoryMethod; // sugestão de método de repository
+    private String conditionalBranch; // condição do if/else se SQL dinâmico
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
@@ -31,4 +32,6 @@ public class SqlQuery {
     public void setJpaEquivalent(String jpaEquivalent) { this.jpaEquivalent = jpaEquivalent; }
     public String getRepositoryMethod() { return repositoryMethod; }
     public void setRepositoryMethod(String repositoryMethod) { this.repositoryMethod = repositoryMethod; }
+    public String getConditionalBranch() { return conditionalBranch; }
+    public void setConditionalBranch(String conditionalBranch) { this.conditionalBranch = conditionalBranch; }
 }

@@ -311,15 +311,8 @@ public class DelphiSourceParser {
             int type = markers.get(i)[1];
 
             if (type == 0) { // SQL.Clear → início de bloco
-                // Se havia um bloco anterior sem Open, finaliza ele
                 if (state == 1 && blockStart >= 0) {
-                    String sql = extractSqlFromRange(src, blockStart, pos);
-                    if (sql != null && sql.length() > 5) {
-                        String key = sql.substring(0, Math.min(40, sql.length()));
-                        if (seen.add(key)) {
-                            queries.add(buildSqlQuery(sql, idx++, src, blockStart));
-                        }
-                    }
+                    idx = addFragmentsAsQueries(src, blockStart, pos, queries, seen, idx);
                 }
                 blockStart = pos;
                 state = 1;
@@ -328,55 +321,149 @@ public class DelphiSourceParser {
                 state = 1;
             } else if (type == 2 && state == 1) { // Open/ExecSQL → fim do bloco
                 blockEnd = pos;
-                String sql = extractSqlFromRange(src, blockStart, blockEnd);
-                if (sql != null && sql.length() > 5) {
-                    String key = sql.substring(0, Math.min(40, sql.length()));
-                    if (seen.add(key)) {
-                        queries.add(buildSqlQuery(sql, idx++, src, blockStart));
-                    }
-                }
+                idx = addFragmentsAsQueries(src, blockStart, blockEnd, queries, seen, idx);
                 state = 0;
                 blockStart = -1;
             }
         }
 
-        // Bloco final sem Open (pode acontecer)
+        // Bloco final sem Open
         if (state == 1 && blockStart >= 0) {
-            String sql = extractSqlFromRange(src, blockStart, src.length());
-            if (sql != null && sql.length() > 5) {
-                String key = sql.substring(0, Math.min(40, sql.length()));
-                if (seen.add(key)) {
-                    queries.add(buildSqlQuery(sql, idx++, src, blockStart));
-                }
-            }
+            idx = addFragmentsAsQueries(src, blockStart, src.length(), queries, seen, idx);
         }
 
         return queries;
     }
 
     /**
-     * Extrai todos os SQL.Add('...') dentro de um range [start, end] do source.
-     * Isso pega SQL.Add mesmo dentro de if/then/else.
+     * Extrai SQL.Add('...') de um range, detectando branches if/else.
+     * Retorna lista de SqlFragment: cada um com o SQL e a condição (se houver).
      */
-    private String extractSqlFromRange(String src, int start, int end) {
+    private List<SqlFragment> extractSqlFragmentsFromRange(String src, int start, int end) {
         String range = src.substring(start, Math.min(end, src.length()));
+        List<SqlFragment> fragments = new ArrayList<>();
+
+        // Detecta padrão: SQL.Add ... end + else + begin ... SQL.Add
+        // Encontra posições de SQL.Add e de "end" + "else" + "begin"
+        List<int[]> addPositions = new ArrayList<>(); // [posição no range, endPos]
+        List<String> addContents = new ArrayList<>();
         Matcher addM = SQL_ADD_LINE_PATTERN.matcher(range);
-        StringBuilder sql = new StringBuilder();
         while (addM.find()) {
-            String fragment = addM.group(1);
-            if (fragment != null && !fragment.isBlank()) {
-                if (sql.length() > 0) sql.append(" ");
-                sql.append(fragment.trim());
-            }
+            addPositions.add(new int[]{addM.start(), addM.end()});
+            addContents.add(addM.group(1));
         }
-        // Se não encontrou SQL.Add, tenta SQL.Text :=
-        if (sql.length() == 0) {
+
+        if (addPositions.isEmpty()) {
+            // Tenta SQL.Text :=
             Matcher textM = SQL_TEXT_ASSIGN_PATTERN.matcher(range);
             if (textM.find()) {
-                sql.append(textM.group(1).trim());
+                fragments.add(new SqlFragment(textM.group(1).trim(), null));
+            }
+            return fragments;
+        }
+
+        // Detecta "end" seguido de "else" entre SQL.Add consecutivos
+        // Padrão: SQL.Add(A) ... end ... else ... begin ... SQL.Add(B)
+        Pattern elsePattern = Pattern.compile("(?i)\\bend\\b[\\s;]*\\belse\\b[\\s]*\\bbegin\\b");
+
+        // Também detecta o if que inicia o primeiro branch
+        String beforeFirstAdd = range.substring(0, addPositions.get(0)[0]);
+        Pattern ifPattern = Pattern.compile("(?i)\\bif\\b\\s*\\(([^)]+)\\)\\s*then\\s*\\bbegin\\b");
+        Matcher ifM = ifPattern.matcher(beforeFirstAdd);
+        String ifCondition = null;
+        if (ifM.find()) {
+            ifCondition = ifM.group(1).trim();
+        }
+
+        // Encontra pontos de corte (posições de end/else/begin entre SQL.Adds)
+        List<Integer> branchCuts = new ArrayList<>();
+        for (int i = 0; i < addPositions.size() - 1; i++) {
+            int gapStart = addPositions.get(i)[1];
+            int gapEnd = addPositions.get(i + 1)[0];
+            String gap = range.substring(gapStart, gapEnd);
+            if (elsePattern.matcher(gap).find()) {
+                branchCuts.add(i + 1); // corta antes do SQL.Add[i+1]
             }
         }
-        return sql.length() > 0 ? sql.toString() : null;
+
+        if (branchCuts.isEmpty() || ifCondition == null) {
+            // Sem branches: junta tudo numa query só
+            StringBuilder sql = new StringBuilder();
+            for (String content : addContents) {
+                if (content != null && !content.isBlank()) {
+                    if (sql.length() > 0) sql.append(" ");
+                    sql.append(content.trim());
+                }
+            }
+            if (sql.length() > 0) {
+                fragments.add(new SqlFragment(sql.toString(), null));
+            }
+        } else {
+            // Tem branches: separa em queries distintas
+            int fromIdx = 0;
+            for (int branchNum = 0; branchNum <= branchCuts.size(); branchNum++) {
+                int toIdx = branchNum < branchCuts.size() ? branchCuts.get(branchNum) : addContents.size();
+                StringBuilder sql = new StringBuilder();
+                for (int i = fromIdx; i < toIdx; i++) {
+                    String content = addContents.get(i);
+                    if (content != null && !content.isBlank()) {
+                        if (sql.length() > 0) sql.append(" ");
+                        sql.append(content.trim());
+                    }
+                }
+                if (sql.length() > 0) {
+                    String condition;
+                    if (branchNum == 0) {
+                        condition = "when " + ifCondition;
+                    } else {
+                        condition = "else (when NOT " + ifCondition + ")";
+                    }
+                    fragments.add(new SqlFragment(sql.toString(), condition));
+                }
+                fromIdx = toIdx;
+            }
+        }
+        return fragments;
+    }
+
+    /** Adiciona fragments como queries (com branches separados) */
+    private int addFragmentsAsQueries(String src, int start, int end,
+                                       List<SqlQuery> queries, Set<String> seen, int idx) {
+        List<SqlFragment> frags = extractSqlFragmentsFromRange(src, start, end);
+        boolean hasMultiple = frags.size() > 1;
+        for (int f = 0; f < frags.size(); f++) {
+            SqlFragment frag = frags.get(f);
+            if (frag.sql == null || frag.sql.length() <= 5) continue;
+            String key = frag.sql.substring(0, Math.min(40, frag.sql.length()));
+            if (!seen.add(key)) continue;
+
+            SqlQuery q = buildSqlQuery(frag.sql, idx++, src, start);
+            if (hasMultiple) {
+                // Sufixo a/b/c para queries do mesmo bloco
+                q.setId(q.getId() + (char)('a' + f));
+            }
+            if (frag.conditionalBranch != null) {
+                q.setConditionalBranch(frag.conditionalBranch);
+                q.setContext(q.getContext() + " (" + frag.conditionalBranch + ")");
+            }
+            queries.add(q);
+        }
+        return idx;
+    }
+
+    /** Backward compat: retorna primeira query do range (ou null) */
+    private String extractSqlFromRange(String src, int start, int end) {
+        List<SqlFragment> frags = extractSqlFragmentsFromRange(src, start, end);
+        return frags.isEmpty() ? null : frags.get(0).sql;
+    }
+
+    private static class SqlFragment {
+        String sql;
+        String conditionalBranch; // null se não condicional
+        SqlFragment(String sql, String conditionalBranch) {
+            this.sql = sql;
+            this.conditionalBranch = conditionalBranch;
+        }
     }
 
     private SqlQuery buildSqlQuery(String sql, int idx, String src, int pos) {
