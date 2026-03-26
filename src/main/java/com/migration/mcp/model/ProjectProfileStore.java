@@ -22,6 +22,7 @@ public class ProjectProfileStore {
     /** Diretório fixo — mesmo para CLI, VS Code, testes, qualquer processo */
     private static final Path PROFILE_DIR;
     private static final Path PROFILE_FILE;
+    private static final Path PATTERNS_FILE;
 
     static {
         Path dir;
@@ -32,12 +33,11 @@ public class ProjectProfileStore {
         }
         PROFILE_DIR = dir;
         PROFILE_FILE = dir.resolve("project-profile.json");
+        PATTERNS_FILE = dir.resolve("entity-patterns.json");
     }
 
-    // INSTANCE deve vir DEPOIS do static block para que PROFILE_FILE já esteja inicializado
+    // INSTANCE deve vir DEPOIS do static block para que PROFILE_FILE e PATTERNS_FILE já estejam inicializados
     private static final ProjectProfileStore INSTANCE = new ProjectProfileStore();
-
-    private static final Path PATTERNS_FILE = PROFILE_DIR != null ? PROFILE_DIR.resolve("entity-patterns.json") : null;
 
     private final ObjectMapper mapper;
     private ProjectProfile current;
