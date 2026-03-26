@@ -397,65 +397,38 @@ public class DelphiSourceParser {
             }
         }
 
-        if (branchCuts.isEmpty() || ifCondition == null) {
-            // Sem branches: junta tudo numa query só
-            StringBuilder sql = new StringBuilder();
-            for (String content : addContents) {
-                if (content != null && !content.isBlank()) {
-                    if (sql.length() > 0) sql.append(" ");
-                    sql.append(content.trim());
-                }
+        // Junta tudo numa query só (sempre — branches são fragmentos da mesma query)
+        StringBuilder sql = new StringBuilder();
+        for (String content : addContents) {
+            if (content != null && !content.isBlank()) {
+                if (sql.length() > 0) sql.append(" ");
+                sql.append(content.trim());
             }
-            if (sql.length() > 0) {
-                fragments.add(new SqlFragment(sql.toString(), null));
+        }
+        if (sql.length() > 0) {
+            String note = null;
+            if (!branchCuts.isEmpty() && ifCondition != null) {
+                // Anota que a query tem branches condicionais (não separa)
+                note = "Contém branch condicional: if (" + ifCondition + ") — "
+                     + "variantes no JOIN/WHERE dependendo da condição";
             }
-        } else {
-            // Tem branches: separa em queries distintas
-            int fromIdx = 0;
-            for (int branchNum = 0; branchNum <= branchCuts.size(); branchNum++) {
-                int toIdx = branchNum < branchCuts.size() ? branchCuts.get(branchNum) : addContents.size();
-                StringBuilder sql = new StringBuilder();
-                for (int i = fromIdx; i < toIdx; i++) {
-                    String content = addContents.get(i);
-                    if (content != null && !content.isBlank()) {
-                        if (sql.length() > 0) sql.append(" ");
-                        sql.append(content.trim());
-                    }
-                }
-                if (sql.length() > 0) {
-                    String condition;
-                    if (branchNum == 0) {
-                        condition = "when " + ifCondition;
-                    } else {
-                        condition = "else (when NOT " + ifCondition + ")";
-                    }
-                    fragments.add(new SqlFragment(sql.toString(), condition));
-                }
-                fromIdx = toIdx;
-            }
+            fragments.add(new SqlFragment(sql.toString(), note));
         }
         return fragments;
     }
 
-    /** Adiciona fragments como queries (com branches separados) */
+    /** Adiciona fragments como queries, anotando branches condicionais */
     private int addFragmentsAsQueries(String src, int start, int end,
                                        List<SqlQuery> queries, Set<String> seen, int idx) {
         List<SqlFragment> frags = extractSqlFragmentsFromRange(src, start, end);
-        boolean hasMultiple = frags.size() > 1;
-        for (int f = 0; f < frags.size(); f++) {
-            SqlFragment frag = frags.get(f);
+        for (SqlFragment frag : frags) {
             if (frag.sql == null || frag.sql.length() <= 5) continue;
             String key = frag.sql.substring(0, Math.min(40, frag.sql.length()));
             if (!seen.add(key)) continue;
 
             SqlQuery q = buildSqlQuery(frag.sql, idx++, src, start);
-            if (hasMultiple) {
-                // Sufixo a/b/c para queries do mesmo bloco
-                q.setId(q.getId() + (char)('a' + f));
-            }
             if (frag.conditionalBranch != null) {
                 q.setConditionalBranch(frag.conditionalBranch);
-                q.setContext(q.getContext() + " (" + frag.conditionalBranch + ")");
             }
             queries.add(q);
         }
