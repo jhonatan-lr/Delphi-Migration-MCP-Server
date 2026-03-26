@@ -74,78 +74,247 @@ public class JavaCodeGenerator {
     // ── Entity ───────────────────────────────────────────────────────────────
 
     public String generateEntity(DelphiClass dc, String packageName) {
-        return generateEntity(dc, packageName, null);
+        return generateEntity(dc, packageName, null, null);
     }
 
     public String generateEntity(DelphiClass dc, String packageName, List<DfmForm.DatasetField> dfmFields) {
+        return generateEntity(dc, packageName, dfmFields, null);
+    }
+
+    /**
+     * Gera Entity JPA no padrão logus-corporativo-api:
+     * - @Table com nome real da tabela (lowercase)
+     * - @GenericGenerator(strategy = "increment")
+     * - LogusDateTime para datas
+     * - @ManyToOne para FKs conhecidas
+     * - Boolean para flb_
+     * - Getters/setters manuais com this.
+     * - Nomes descritivos (cdg_filial → codigoFilial)
+     *
+     * @param tableName nome real da tabela no banco (ex: "estmpedautomatico"). Se null, infere do nome da classe.
+     */
+    public String generateEntity(DelphiClass dc, String packageName,
+                                  List<DfmForm.DatasetField> dfmFields, String tableName) {
         StringBuilder sb = new StringBuilder();
         String baseName = cleanClassNameWithProfile(dc.getName());
         String entityClass = baseName + "Entity";
-        String tableName = toTableName(baseName);
+        if (tableName == null || tableName.isBlank()) {
+            tableName = toTableName(baseName).toLowerCase();
+        }
 
-        sb.append("package ").append(packageName).append(".entity;\n\n");
+        // ── Imports ──
+        sb.append("package logus.corporativo.api.entity;\n\n");
         sb.append("import javax.persistence.*;\n");
+        sb.append("import org.hibernate.annotations.GenericGenerator;\n");
+        sb.append("import org.hibernate.annotations.Type;\n");
+        sb.append("import logusretail.manager.type.LogusDateTime;\n");
         sb.append("import java.io.Serializable;\n");
-        sb.append("import java.math.BigDecimal;\n");
-        sb.append("import java.util.Date;\n\n");
+        sb.append("import java.math.BigDecimal;\n\n");
 
+        // ── Class declaration ──
         sb.append("@Entity\n");
         sb.append("@Table(name = \"").append(tableName).append("\")\n");
-        sb.append("@Access(AccessType.FIELD)\n");
         sb.append("public class ").append(entityClass).append(" implements Serializable {\n\n");
-        sb.append("    private static final long serialVersionUID = 1L;\n\n");
+        sb.append("  private static final long serialVersionUID = 1L;\n\n");
 
-        // Id
-        sb.append("    @Id\n");
-        sb.append("    @GeneratedValue(strategy = GenerationType.IDENTITY)\n");
-        sb.append("    @Column(name = \"cdg_id\")\n");
-        sb.append("    private Integer id;\n\n");
+        // ── Resolve fields ──
+        List<EntityField> fields = resolveEntityFields(dc, dfmFields);
 
-        // Fields — primeiro tenta do DelphiClass, se vazio usa dfmFields do DFM
-        List<String[]> fieldList = new ArrayList<>();
-        for (DelphiField field : dc.getFields()) {
-            if (field.isComponent()) continue;
-            String colName = toColumnName(field.getName());
-            String javaType = mapToApiType(field.getJavaType());
-            String javaField = toCamelCase(removeFieldPrefix(field.getName()));
-            fieldList.add(new String[]{colName, javaType, javaField});
-        }
+        // ── Detect PK ──
+        String pkColumn = detectPkColumn(fields, tableName);
 
-        // Fallback: usa campos extraídos do DFM (TClientDataSet fields)
-        if (fieldList.isEmpty() && dfmFields != null && !dfmFields.isEmpty()) {
-            Set<String> seenFields = new HashSet<>();
-            for (DfmForm.DatasetField df : dfmFields) {
-                String colName = df.getName();
-                String javaType = df.getJavaType();
-                String javaField = snakeToCamel(colName);
-                // Evita duplicatas e campos que são o próprio ID
-                if (javaField.equals("id") || javaField.isEmpty() || !seenFields.add(javaField)) continue;
-                fieldList.add(new String[]{colName, javaType, javaField});
+        // ── @Id ──
+        sb.append("  @Id\n");
+        sb.append("  @GeneratedValue(generator = \"generator\")\n");
+        sb.append("  @GenericGenerator(name = \"generator\", strategy = \"increment\")\n");
+        sb.append("  @Column(name = \"").append(pkColumn).append("\")\n");
+        sb.append("  private Integer id;\n\n");
+
+        // ── Fields ──
+        for (EntityField f : fields) {
+            if (f.colName.equals(pkColumn)) continue; // PK já gerada acima
+
+            // @ManyToOne para FKs conhecidas
+            if (f.manyToOneEntity != null) {
+                sb.append("  @ManyToOne(fetch = FetchType.LAZY)\n");
+                sb.append("  @JoinColumn(name = \"").append(f.colName).append("\")\n");
+                sb.append("  private ").append(f.manyToOneEntity).append(" ").append(f.javaName).append(";\n\n");
+                continue;
             }
+
+            // LogusDateTime para datas
+            if (f.isDate) {
+                sb.append("  @Column(name = \"").append(f.colName).append("\")\n");
+                sb.append("  @Type(type = \"logus.corporativo.api.entity.persistant.PersistantLogusDateTime\")\n");
+                sb.append("  private LogusDateTime ").append(f.javaName).append(";\n\n");
+                continue;
+            }
+
+            // Campo normal
+            sb.append("  @Column(name = \"").append(f.colName).append("\")\n");
+            sb.append("  private ").append(f.javaType).append(" ").append(f.javaName).append(";\n\n");
         }
 
-        for (String[] f : fieldList) {
-            sb.append("    @Column(name = \"").append(f[0]).append("\")\n");
-            sb.append("    private ").append(f[1]).append(" ").append(f[2]).append(";\n\n");
-        }
+        // ── Constructor ──
+        sb.append("  public ").append(entityClass).append("() {\n");
+        sb.append("    super();\n");
+        sb.append("  }\n\n");
 
-        // Constructor vazio
-        sb.append("    public ").append(entityClass).append("() {\n");
-        sb.append("        super();\n");
-        sb.append("    }\n\n");
+        // ── Getters & Setters manuais com this. ──
+        sb.append("  public Integer getId() {\n    return this.id;\n  }\n\n");
+        sb.append("  public void setId(Integer id) {\n    this.id = id;\n  }\n\n");
 
-        // Getters and Setters
-        sb.append("    public Integer getId() { return id; }\n");
-        sb.append("    public void setId(Integer id) { this.id = id; }\n\n");
-
-        for (String[] f : fieldList) {
-            String cap = capitalize(f[2]);
-            sb.append("    public ").append(f[1]).append(" get").append(cap).append("() { return ").append(f[2]).append("; }\n");
-            sb.append("    public void set").append(cap).append("(").append(f[1]).append(" ").append(f[2]).append(") { this.").append(f[2]).append(" = ").append(f[2]).append("; }\n\n");
+        for (EntityField f : fields) {
+            if (f.colName.equals(pkColumn)) continue;
+            String type = f.manyToOneEntity != null ? f.manyToOneEntity : (f.isDate ? "LogusDateTime" : f.javaType);
+            String cap = capitalize(f.javaName);
+            sb.append("  public ").append(type).append(" get").append(cap).append("() {\n");
+            sb.append("    return this.").append(f.javaName).append(";\n  }\n\n");
+            sb.append("  public void set").append(cap).append("(").append(type).append(" ").append(f.javaName).append(") {\n");
+            sb.append("    this.").append(f.javaName).append(" = ").append(f.javaName).append(";\n  }\n\n");
         }
 
         sb.append("}\n");
         return sb.toString();
+    }
+
+    // ── Entity Field Resolution ──────────────────────────────────────────────
+
+    /** Campo resolvido para entity com todas as informações de mapeamento */
+    private static class EntityField {
+        String colName;           // nome da coluna no banco (lowercase)
+        String javaName;          // nome Java descritivo (camelCase)
+        String javaType;          // Integer, String, BigDecimal, Boolean
+        boolean isDate;           // usa LogusDateTime
+        String manyToOneEntity;   // ex: "FilialEntity" se é FK, null se campo simples
+    }
+
+    /** FKs conhecidas do projeto Logus → Entity correspondente */
+    private static final Map<String, String> KNOWN_FK_ENTITIES = new LinkedHashMap<>();
+    static {
+        KNOWN_FK_ENTITIES.put("cdg_filial", "FilialEntity");
+        KNOWN_FK_ENTITIES.put("cdg_produto", "EmbalagemEntity");
+        KNOWN_FK_ENTITIES.put("cdg_secao", "SecaoEntity");
+        KNOWN_FK_ENTITIES.put("cdg_grupo", "GrupoEntity");
+        KNOWN_FK_ENTITIES.put("cdg_subgrupo", "SubGrupoEntity");
+        KNOWN_FK_ENTITIES.put("cdg_depto", "DepartamentoEntity");
+    }
+
+    /** Resolve campos: converte nomes técnicos para descritivos seguindo padrão Logus */
+    private List<EntityField> resolveEntityFields(DelphiClass dc, List<DfmForm.DatasetField> dfmFields) {
+        List<EntityField> fields = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+
+        // Tenta do DelphiClass primeiro
+        for (DelphiField f : dc.getFields()) {
+            if (f.isComponent()) continue;
+            EntityField ef = mapToEntityField(f.getName().toLowerCase(), f.getJavaType());
+            if (ef != null && !ef.javaName.equals("id") && seen.add(ef.javaName)) {
+                fields.add(ef);
+            }
+        }
+
+        // Fallback: DFM fields
+        if (fields.isEmpty() && dfmFields != null) {
+            for (DfmForm.DatasetField df : dfmFields) {
+                EntityField ef = mapToEntityField(df.getName(), df.getDelphiType());
+                if (ef != null && !ef.javaName.equals("id") && seen.add(ef.javaName)) {
+                    fields.add(ef);
+                }
+            }
+        }
+        return fields;
+    }
+
+    /** Mapeia um campo Delphi para EntityField com nome descritivo e tipo correto */
+    private EntityField mapToEntityField(String colName, String delphiType) {
+        if (colName == null || colName.isBlank()) return null;
+        colName = colName.toLowerCase();
+
+        EntityField ef = new EntityField();
+        ef.colName = colName;
+
+        // Nome Java descritivo: remove prefixo técnico e expande abreviações
+        ef.javaName = toDescriptiveJavaName(colName);
+
+        // @ManyToOne para FKs conhecidas
+        if (KNOWN_FK_ENTITIES.containsKey(colName)) {
+            ef.manyToOneEntity = KNOWN_FK_ENTITIES.get(colName);
+            ef.javaName = colName.replace("cdg_", "").replace("_", "");
+            // ex: cdg_filial → filial
+            return ef;
+        }
+
+        // Tipo baseado no prefixo + tipo Delphi
+        if (colName.startsWith("dat_")) {
+            ef.isDate = true;
+            ef.javaType = "LogusDateTime";
+        } else if (colName.startsWith("flb_")) {
+            ef.javaType = "Boolean";
+        } else if (colName.startsWith("flg_")) {
+            ef.javaType = "Integer"; // TODO: gerar enum com @Convert
+        } else if (colName.startsWith("qtd_") || colName.startsWith("val_") || colName.startsWith("pct_")) {
+            ef.javaType = "BigDecimal";
+        } else if (colName.startsWith("cdg_") || colName.startsWith("nmr_")) {
+            // TStringField → String, senão Integer
+            if (delphiType != null && (delphiType.contains("String") || delphiType.contains("Memo"))) {
+                ef.javaType = "String";
+            } else {
+                ef.javaType = "Integer";
+            }
+        } else {
+            ef.javaType = "String"; // dcr_, sgl_, etc.
+        }
+
+        return ef;
+    }
+
+    /** Converte nome de coluna técnico para nome Java descritivo */
+    private String toDescriptiveJavaName(String colName) {
+        // Remove prefixo técnico e expande
+        String name = colName;
+        if (name.startsWith("cdg_")) name = name.substring(4);
+        else if (name.startsWith("dcr_")) name = name.substring(4);
+        else if (name.startsWith("nmr_")) name = "numero" + capitalize(snakeToCamel(name.substring(4)));
+        else if (name.startsWith("dat_")) name = "data" + capitalize(snakeToCamel(name.substring(4)));
+        else if (name.startsWith("qtd_")) name = "quantidade" + capitalize(snakeToCamel(name.substring(4)));
+        else if (name.startsWith("val_")) name = "valor" + capitalize(snakeToCamel(name.substring(4)));
+        else if (name.startsWith("pct_")) name = "percentual" + capitalize(snakeToCamel(name.substring(4)));
+        else if (name.startsWith("flb_")) name = name.substring(4);
+        else if (name.startsWith("flg_")) name = name.substring(4);
+        else if (name.startsWith("sgl_")) name = "sigla" + capitalize(snakeToCamel(name.substring(4)));
+
+        // Se não removeu prefixo, faz snakeToCamel direto
+        if (name.equals(colName)) {
+            return snakeToCamel(name);
+        }
+        // Se já tem capitalize no meio (ex: "numero" + "PedidoCompra"), retorna
+        if (name.contains("numero") || name.contains("data") || name.contains("quantidade") ||
+            name.contains("valor") || name.contains("percentual") || name.contains("sigla")) {
+            return name;
+        }
+        return snakeToCamel(name);
+    }
+
+    /** Detecta a coluna PK baseado no nome da tabela e campos disponíveis */
+    private String detectPkColumn(List<EntityField> fields, String tableName) {
+        // Procura campo cdg_ que parece ser PK
+        for (EntityField f : fields) {
+            if (f.colName.startsWith("cdg_") && f.colName.contains("_ped_") && !f.colName.contains("filial")) {
+                return f.colName; // ex: cdg_ped_auto
+            }
+        }
+        // Procura primeiro cdg_ que não é FK conhecida
+        for (EntityField f : fields) {
+            if (f.colName.startsWith("cdg_") && !KNOWN_FK_ENTITIES.containsKey(f.colName)) {
+                return f.colName;
+            }
+        }
+        // Fallback: primeiro campo inteiro
+        for (EntityField f : fields) {
+            if ("Integer".equals(f.javaType)) return f.colName;
+        }
+        return "id";
     }
 
     // ── Repository ───────────────────────────────────────────────────────────

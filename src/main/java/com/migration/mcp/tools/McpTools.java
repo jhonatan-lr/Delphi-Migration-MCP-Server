@@ -360,7 +360,15 @@ class GenerateJavaClassTool extends BaseTool {
                     if (cleanBase.isEmpty()) cleanBase = baseName;
 
                     if (generate.contains("entity")) {
-                        generatedFiles.put(cleanBase + "Entity.java", generator.generateEntity(dc, packageName, finalDfmFields));
+                        // Extrai nome da tabela principal da primeira SQL SELECT
+                        String mainTable = null;
+                        for (SqlQuery sq : unit.getSqlQueries()) {
+                            if ("SELECT".equals(sq.getQueryType()) && sq.getTablesUsed() != null && !sq.getTablesUsed().isEmpty()) {
+                                mainTable = sq.getTablesUsed().get(0).toLowerCase();
+                                break;
+                            }
+                        }
+                        generatedFiles.put(cleanBase + "Entity.java", generator.generateEntity(dc, packageName, finalDfmFields, mainTable));
                     }
                     if (generate.contains("repository")) {
                         generatedFiles.put(cleanBase + "Repository.java", generator.generateRepository(dc, packageName));
@@ -665,7 +673,15 @@ class GenerateFullModuleTool extends BaseTool {
                     String baseName = dc.getName().replaceAll("^T", "").replaceAll("^(?i)(frm|Frm)", "");
                     if (baseName.isEmpty()) baseName = dc.getName().replaceAll("^T", "");
 
-                    javaFiles.put(baseName + "Entity.java", javaGenerator.generateEntity(dc, packageName, dfmFields));
+                    // Extrai tabela principal da SQL
+                    String mainTable = null;
+                    for (SqlQuery sq : unit.getSqlQueries()) {
+                        if ("SELECT".equals(sq.getQueryType()) && sq.getTablesUsed() != null && !sq.getTablesUsed().isEmpty()) {
+                            mainTable = sq.getTablesUsed().get(0).toLowerCase();
+                            break;
+                        }
+                    }
+                    javaFiles.put(baseName + "Entity.java", javaGenerator.generateEntity(dc, packageName, dfmFields, mainTable));
                     javaFiles.put(baseName + "Repository.java", javaGenerator.generateRepository(dc, packageName));
                     javaFiles.put(baseName + "Service.java", javaGenerator.generateService(dc, packageName, unit.getSqlQueries(), unit.getBusinessRules()));
                     javaFiles.put(baseName + "Resource.java", javaGenerator.generateController(dc, packageName));
