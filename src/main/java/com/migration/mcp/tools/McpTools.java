@@ -71,6 +71,10 @@ class AnalyzeDelphiUnitTool extends BaseTool {
 
     /** Lê arquivo tentando UTF-8 primeiro, depois ISO-8859-1 (arquivos Delphi legados) */
     static String readFileWithFallback(java.nio.file.Path path) throws IOException {
+        if (!Files.exists(path)) {
+            throw new IOException("Arquivo não encontrado: " + path.toAbsolutePath() +
+                    "\nVerifique o caminho e a extensão (.pas, .dfm).");
+        }
         try {
             return Files.readString(path, StandardCharsets.UTF_8);
         } catch (java.nio.charset.MalformedInputException e) {

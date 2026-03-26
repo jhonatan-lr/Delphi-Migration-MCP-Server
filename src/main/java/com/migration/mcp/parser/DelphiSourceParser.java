@@ -432,9 +432,54 @@ public class DelphiSourceParser {
                 note = "Contém branch condicional: " + condText + " — "
                      + "variantes no JOIN/WHERE dependendo da condição";
             }
-            fragments.add(new SqlFragment(sql.toString(), note));
+            // Post-processing: detecta queries grudadas (2+ SELECT/INSERT/UPDATE/DELETE na mesma string)
+            String fullSql = sql.toString();
+            List<String> splitQueries = splitGluedQueries(fullSql);
+            if (splitQueries.size() > 1) {
+                for (String sq : splitQueries) {
+                    fragments.add(new SqlFragment(sq.trim(), note));
+                }
+            } else {
+                fragments.add(new SqlFragment(fullSql, note));
+            }
         }
         return fragments;
+    }
+
+    /**
+     * Detecta quando 2+ queries estão grudadas (ex: "select * from A select * from B")
+     * e separa em queries individuais.
+     * Ignora subselects (precedidos por ( ou IN ou EXISTS).
+     */
+    private List<String> splitGluedQueries(String sql) {
+        List<String> queries = new ArrayList<>();
+        // Encontra posições de SELECT/INSERT/UPDATE/DELETE
+        Pattern startPattern = Pattern.compile("(?i)\\b(SELECT|INSERT\\s+INTO|UPDATE|DELETE\\s+FROM)\\b");
+        Matcher m = startPattern.matcher(sql);
+        List<Integer> starts = new ArrayList<>();
+        while (m.find()) {
+            int pos = m.start();
+            // Verifica se é subselect: precedido por ( ou IN ou EXISTS nos últimos 10 chars
+            if (pos > 0) {
+                String before = sql.substring(Math.max(0, pos - 10), pos).trim();
+                if (before.endsWith("(") || before.toUpperCase().endsWith("IN") ||
+                    before.toUpperCase().endsWith("EXISTS") || before.toUpperCase().endsWith("=")) {
+                    continue; // é subselect, não query nova
+                }
+            }
+            starts.add(pos);
+        }
+        if (starts.size() <= 1) return queries; // nada a separar
+
+        for (int i = 0; i < starts.size(); i++) {
+            int from = starts.get(i);
+            int to = i + 1 < starts.size() ? starts.get(i + 1) : sql.length();
+            String part = sql.substring(from, to).trim();
+            if (part.length() > 10) {
+                queries.add(part);
+            }
+        }
+        return queries;
     }
 
     /** Adiciona fragments como queries, anotando branches condicionais */
