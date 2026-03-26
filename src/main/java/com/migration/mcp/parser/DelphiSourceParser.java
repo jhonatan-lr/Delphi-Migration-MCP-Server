@@ -340,7 +340,9 @@ public class DelphiSourceParser {
      * Retorna lista de SqlFragment: cada um com o SQL e a condição (se houver).
      */
     private List<SqlFragment> extractSqlFragmentsFromRange(String src, int start, int end) {
-        String range = src.substring(start, Math.min(end, src.length()));
+        // Expande o start para trás (até 300 chars) para capturar o if antes do primeiro SQL.Add
+        int expandedStart = Math.max(0, start - 300);
+        String range = src.substring(expandedStart, Math.min(end, src.length()));
         List<SqlFragment> fragments = new ArrayList<>();
 
         // Detecta padrão: SQL.Add ... end + else + begin ... SQL.Add
