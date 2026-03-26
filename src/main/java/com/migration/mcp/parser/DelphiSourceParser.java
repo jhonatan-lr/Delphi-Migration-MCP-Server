@@ -375,7 +375,8 @@ public class DelphiSourceParser {
 
         // Detecta "end" seguido de "else" entre SQL.Add consecutivos
         // Padrão: SQL.Add(A) ... end ... else ... begin ... SQL.Add(B)
-        Pattern elsePattern = Pattern.compile("(?i)\\bend\\b[\\s;]*\\belse\\b[\\s]*\\bbegin\\b");
+        // Aceita qualquer conteúdo entre end e else (pode ter ParamByName, comentários, etc.)
+        Pattern elsePattern = Pattern.compile("(?si)\\bend\\b.*?\\belse\\b.*?\\bbegin\\b");
 
         // Também detecta o if que inicia o primeiro branch
         String beforeFirstAdd = range.substring(0, addPositions.get(0)[0]);
