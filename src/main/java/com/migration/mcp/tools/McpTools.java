@@ -709,3 +709,237 @@ class GenerateFullModuleTool extends BaseTool {
         }));
     }
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// TOOL: get_usage_guide — Manual de uso para agentes de IA
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class GetUsageGuideTool extends BaseTool {
+
+    @Override
+    public McpServerFeatures.SyncToolSpecification getSpecification() {
+        McpSchema.Tool tool = new McpSchema.Tool(
+                "get_usage_guide",
+                "Retorna o manual completo de uso do Delphi Migration MCP Server. " +
+                "Chame esta tool PRIMEIRO para aprender como usar todas as outras tools corretamente. " +
+                "Inclui: fluxo recomendado, exemplos de chamadas, padrões do projeto alvo (Logus ERP), " +
+                "e dicas para gerar código de qualidade.",
+                """
+                {
+                  "type": "object",
+                  "properties": {
+                    "section": {"type": "string", "description": "Seção específica: 'quickstart', 'tools', 'patterns', 'examples', 'all' (padrão: all)"}
+                  }
+                }
+                """
+        );
+        return new McpServerFeatures.SyncToolSpecification(tool, (exchange, args) -> withLogging("get_usage_guide", args, () -> {
+                String section = optionalString(args, "section", "all");
+                StringBuilder guide = new StringBuilder();
+
+                if (section.equals("all") || section.equals("quickstart")) {
+                    guide.append(QUICKSTART);
+                }
+                if (section.equals("all") || section.equals("tools")) {
+                    guide.append(TOOLS_REFERENCE);
+                }
+                if (section.equals("all") || section.equals("patterns")) {
+                    guide.append(PATTERNS);
+                }
+                if (section.equals("all") || section.equals("examples")) {
+                    guide.append(EXAMPLES);
+                }
+
+                // Adiciona info do perfil aprendido se disponível
+                ProjectProfileStore store = ProjectProfileStore.getInstance();
+                if (store.hasProfile()) {
+                    ProjectProfile p = store.get();
+                    guide.append("\n## Perfil Aprendido Atual\n\n");
+                    guide.append("- **Projeto:** ").append(p.getProjectName()).append("\n");
+                    guide.append("- **Arquivos:** ").append(p.getTotalFilesScanned()).append("\n");
+                    guide.append("- **Delphi:** ").append(p.getDetectedDelphiVersion()).append("\n");
+                    guide.append("- **BD:** ").append(p.getDbTechnology()).append(" / ").append(p.getDbVendor()).append("\n");
+                    guide.append("- **Prefixos:** form=").append(p.getNaming().getFormPrefix())
+                          .append(", unit=").append(p.getNaming().getUnitPrefix())
+                          .append(", query=").append(p.getNaming().getQueryPrefix()).append("\n");
+                    guide.append("\n> Perfil já carregado. Não precisa rodar learn_repository novamente.\n");
+                } else {
+                    guide.append("\n## ⚠️ Nenhum perfil aprendido\n\n");
+                    guide.append("Execute `learn_repository` primeiro com o caminho do projeto Delphi.\n");
+                }
+
+                return success(Map.of("guide", guide.toString()));
+        }));
+    }
+
+    // ── Conteúdo do guia ──────────────────────────────────────────────────────
+
+    private static final String QUICKSTART = """
+## Quickstart — Fluxo Recomendado
+
+### 1. Aprender o repositório (uma vez)
+```
+learn_repository(repository_path: "C:\\caminho\\do\\projeto-delphi")
+```
+Isso varre todos os .pas e .dfm e aprende: prefixos, BD, módulos, SQL, componentes.
+O perfil é persistido em disco — sobrevive a reinícios.
+
+### 2. Migrar uma tela completa (Java + Angular)
+```
+generate_full_module(
+  pas_file_path: "C:\\projeto\\f_MinhaTelaDelphipas",
+  package_name: "logus.corporativo.api.meumodulo",
+  output_dir: "C:\\output"    // opcional: salva em disco
+)
+```
+Gera **24 arquivos** de uma vez:
+- 7 Java: Entity, Repository, Service, Resource, DTO, PesquisaDTO, GridVo
+- 17 Angular: Module, Routing, Container, Grid, Filtros, Cadastro, Services, Models
+
+### 3. Analisar antes de migrar (opcional)
+```
+analyze_delphi_unit(file_path: "C:\\projeto\\f_Tela.pas")
+analyze_dfm_form(file_path: "C:\\projeto\\f_Tela.dfm")
+extract_sql_queries(file_path: "C:\\projeto\\f_Tela.pas")
+extract_business_rules(file_path: "C:\\projeto\\f_Tela.pas")
+detect_inconsistencies(file_path: "C:\\projeto\\f_Tela.pas")
+```
+
+### 4. Gerar plano de migração
+```
+generate_migration_plan(
+  project_name: "Meu Módulo",
+  pas_files: ["f_Tela1.pas", "f_Tela2.pas"],
+  dfm_files: ["f_Tela1.dfm", "f_Tela2.dfm"],
+  output_format: "markdown"
+)
+```
+
+""";
+
+    private static final String TOOLS_REFERENCE = """
+## Referência de Tools (14 tools)
+
+### Aprendizado
+| Tool | Quando usar |
+|------|-------------|
+| `learn_repository` | **Uma vez** no início. Passe o caminho raiz do projeto Delphi. |
+| `get_learned_profile` | Para ver o que foi aprendido (BD, prefixos, módulos). |
+| `clear_learned_profile` | Para trocar de projeto. |
+| `get_usage_guide` | Este manual. Chame para aprender a usar o MCP. |
+
+### Análise
+| Tool | Input | Output |
+|------|-------|--------|
+| `analyze_delphi_unit` | .pas (file_path) | Classes, métodos, SQL, regras, dependências (calledForms) |
+| `analyze_dfm_form` | .dfm (file_path) | Componentes mapeados PrimeNG, gridColumns, datasetFields |
+| `extract_sql_queries` | .pas (file_path) | SQLs completas com JPQL sugerido e @Param tipados |
+| `extract_business_rules` | .pas (file_path) | Validações e cálculos com código Java sugerido |
+| `analyze_delphi_project` | diretório | Inventário completo (todos .pas + .dfm) |
+| `detect_inconsistencies` | .pas ou .dfm | Desvios do padrão do projeto (nomenclatura, SQL, componentes) |
+
+### Geração
+| Tool | Input | Output |
+|------|-------|--------|
+| `generate_full_module` | .pas + package | **24 arquivos** Java + Angular + salva em disco |
+| `generate_java_class` | .pas + package | 7 arquivos Java (Entity/Repository/Service/Resource/DTO/VO) |
+| `generate_angular_component` | .dfm + .pas | 17 arquivos Angular (Module/Container/Grid/Filtros/Cadastro) |
+| `generate_migration_plan` | lista .pas + .dfm | Plano completo com fases, riscos e estimativas |
+
+### Dica importante
+Todas as tools aceitam `file_path` — passe o caminho absoluto do arquivo.
+O campo `content` é opcional (use apenas se quiser enviar o conteúdo diretamente).
+
+""";
+
+    private static final String PATTERNS = """
+## Padrões do Projeto Alvo (Logus ERP)
+
+### Backend — logus-corporativo-api
+- **Java 8** / Spring Boot 2.1.2
+- **Camadas:** Resource → Service → Repository → Entity
+- **DTOs:** DTO (entrada/saída), VO (grid), PesquisaDto (filtros + LazyLoadDto), ResultDto (paginação)
+- **@Autowired** field injection (não constructor injection)
+- **Swagger 2:** @ApiOperation, @ApiParam (springfox, não springdoc)
+- **Endpoints:** POST /pesquisar, POST /save, GET /getById/{id}, DELETE /delete/{id}
+- **Error handling:** ValidationException → 409, Exception → 500
+- **Entity:** javax.persistence (não jakarta), Integer como tipo de ID
+
+### Frontend — logus-corporativo-web
+- **Angular 10** / PrimeNG 11 (NÃO Angular Material)
+- **Padrão:** Container / Grid / Filtros / Cadastro (4 sub-components por feature)
+- **Service:** BehaviorSubject como state store (grid$, selecionado$, alterarEditar$)
+- **HTTP Service:** separado em shared/services/http/
+- **Shared components:** DataGrid, Filtro, Button, ComponenteBasico, BotoesExportar
+- **ChangeDetectionStrategy.OnPush** no Container
+- **Lazy loading** via RouterModule.forChild
+
+### Mapeamento Delphi → PrimeNG
+| Delphi | Angular (PrimeNG) |
+|--------|-------------------|
+| TLgCorporativoLookupComboEdit | `<p-dropdown [filter]="true" [showClear]="true">` |
+| TJvDateEdit | `<p-calendar dateFormat="dd/mm/yy" [showIcon]="true">` |
+| TwwDBGrid | `<p-table>` (shared DataGrid com paginator) |
+| TLgBitBtn / PngBitBtn | `<button pButton>` com ícone PrimeNG |
+| TGroupBox | `<p-fieldset legend="...">` |
+| TEdit | `<input pInputText>` |
+| TCheckBox | `<p-checkbox>` |
+| TPageControl | `<p-tabView>` |
+| TClientDataSet | BehaviorSubject no Service |
+
+""";
+
+    private static final String EXAMPLES = """
+## Exemplos Práticos
+
+### Migrar uma tela do zero
+```
+// 1. Se ainda não aprendeu o repositório:
+learn_repository(repository_path: "C:\\des-jhs\\projeto\\delphi-corporativo")
+
+// 2. Gerar tudo de uma vez:
+generate_full_module(
+  pas_file_path: "C:\\des-jhs\\projeto\\Financeiro\\f_ConciliacaoPagamentos.pas",
+  package_name: "logus.corporativo.api.financeiro",
+  output_dir: "C:\\output\\financeiro"
+)
+```
+
+### Analisar complexidade antes de migrar
+```
+analyze_delphi_project(
+  project_dir: "C:\\des-jhs\\projeto\\GerenciamentoArmazenagem",
+  max_files: 50
+)
+```
+
+### Extrair todas as SQLs de uma tela
+```
+extract_sql_queries(file_path: "C:\\des-jhs\\projeto\\f_pedido.pas")
+```
+Retorna: SQL completa + @Query nativeQuery + JPQL + @Param tipados + tabelas + JOINs
+
+### Ver dependências entre telas
+```
+analyze_delphi_unit(file_path: "C:\\des-jhs\\projeto\\f_MonitorPedido.pas")
+```
+O campo `calledForms` mostra quais forms são chamados (MakeShowModal, Create, ShowModal).
+
+### Gerar só o Java (sem Angular)
+```
+generate_java_class(
+  file_path: "C:\\des-jhs\\projeto\\f_Cliente.pas",
+  package_name: "logus.corporativo.api.clientes",
+  generate: ["entity", "repository", "service"]
+)
+```
+
+### Gerar só o Angular (sem Java)
+```
+generate_angular_component(
+  file_path: "C:\\des-jhs\\projeto\\f_Cliente.dfm",
+  pas_file_path: "C:\\des-jhs\\projeto\\f_Cliente.pas"
+)
+```
+
+""";
+}

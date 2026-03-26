@@ -22,6 +22,7 @@ public class DelphiMigrationTools {
     private final GenerateAngularComponent generateAngularTool;
     private final AnalyzeProjectTool    analyzeProjectTool;
     private final GenerateFullModuleTool generateFullModuleTool;
+    private final GetUsageGuideTool     usageGuideTool;
 
     public DelphiMigrationTools() {
         this.learnRepositoryTool = new LearnRepositoryTool();
@@ -37,11 +38,14 @@ public class DelphiMigrationTools {
         this.generateAngularTool = new GenerateAngularComponent();
         this.analyzeProjectTool  = new AnalyzeProjectTool();
         this.generateFullModuleTool = new GenerateFullModuleTool();
+        this.usageGuideTool      = new GetUsageGuideTool();
     }
 
     public List<McpServerFeatures.SyncToolSpecification> all() {
         return List.of(
-                // ── Aprendizado de repositório (use primeiro!) ──
+                // ── Manual de uso (chame primeiro!) ──────────────
+                usageGuideTool.getSpecification(),
+                // ── Aprendizado de repositório ───────────────────
                 learnRepositoryTool.getSpecification(),
                 getProfileTool.getSpecification(),
                 clearProfileTool.getSpecification(),
