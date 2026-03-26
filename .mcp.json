@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "delphi-migration": {
+      "type": "stdio",
+      "command": "C:\\Program Files\\Java\\jdk-17\\bin\\java.exe",
+      "args": [
+        "-Xmx1024m",
+        "-Dfile.encoding=UTF-8",
+        "-jar",
+        "C:\\Users\\Usuario\\Desktop\\MCP\\delphi-migration-mcp\\target\\delphi-migration-mcp-1.0.0.jar"
+      ]
+    }
+  }
+}

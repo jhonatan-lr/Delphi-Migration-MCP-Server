@@ -1,0 +1,41 @@
+{
+  "_comment": "Adicione este bloco ao seu claude_desktop_config.json",
+  "_locations": {
+    "macOS":   "~/Library/Application Support/Claude/claude_desktop_config.json",
+    "Windows": "%APPDATA%\\Claude\\claude_desktop_config.json"
+  },
+
+  "mcpServers": {
+    "delphi-migration": {
+
+      "_option_1_jar_direto": {
+        "command": "java",
+        "args": [
+          "-Xmx512m",
+          "-Dfile.encoding=UTF-8",
+          "-jar",
+          "/caminho/absoluto/para/delphi-migration-mcp/target/delphi-migration-mcp-1.0.0.jar"
+        ]
+      },
+
+      "_option_2_script_linux_mac": {
+        "command": "/caminho/para/delphi-migration-mcp/start.sh"
+      },
+
+      "_option_3_script_windows": {
+        "command": "cmd",
+        "args": ["/c", "C:\\caminho\\para\\delphi-migration-mcp\\start.bat"]
+      },
+
+      "ATIVO_SUBSTITUIR_PELO_CAMINHO_REAL": {
+        "command": "java",
+        "args": [
+          "-Xmx512m",
+          "-Dfile.encoding=UTF-8",
+          "-jar",
+          "SUBSTITUIR_PELO_CAMINHO_ABSOLUTO/target/delphi-migration-mcp-1.0.0.jar"
+        ]
+      }
+    }
+  }
+}
