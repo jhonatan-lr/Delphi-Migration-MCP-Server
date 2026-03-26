@@ -21,6 +21,7 @@ public class DelphiMigrationTools {
     private final GenerateJavaClassTool generateJavaTool;
     private final GenerateAngularComponent generateAngularTool;
     private final AnalyzeProjectTool    analyzeProjectTool;
+    private final GenerateFullModuleTool generateFullModuleTool;
 
     public DelphiMigrationTools() {
         this.learnRepositoryTool = new LearnRepositoryTool();
@@ -35,6 +36,7 @@ public class DelphiMigrationTools {
         this.generateJavaTool    = new GenerateJavaClassTool();
         this.generateAngularTool = new GenerateAngularComponent();
         this.analyzeProjectTool  = new AnalyzeProjectTool();
+        this.generateFullModuleTool = new GenerateFullModuleTool();
     }
 
     public List<McpServerFeatures.SyncToolSpecification> all() {
@@ -53,7 +55,8 @@ public class DelphiMigrationTools {
                 // ── Geração ──────────────────────────────────────
                 generatePlanTool.getSpecification(),
                 generateJavaTool.getSpecification(),
-                generateAngularTool.getSpecification()
+                generateAngularTool.getSpecification(),
+                generateFullModuleTool.getSpecification()
         );
     }
 }

@@ -572,3 +572,140 @@ class AnalyzeProjectTool extends BaseTool {
         }));
     }
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// TOOL 9: Generate Full Module (Java + Angular + Plan em uma chamada)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class GenerateFullModuleTool extends BaseTool {
+
+    private final DelphiSourceParser sourceParser = new DelphiSourceParser();
+    private final DfmFormParser dfmParser = new DfmFormParser();
+    private final com.migration.mcp.generator.JavaCodeGenerator javaGenerator = new com.migration.mcp.generator.JavaCodeGenerator();
+    private final com.migration.mcp.generator.AngularCodeGenerator angularGenerator = new com.migration.mcp.generator.AngularCodeGenerator();
+
+    @Override
+    public McpServerFeatures.SyncToolSpecification getSpecification() {
+        McpSchema.Tool tool = new McpSchema.Tool(
+                "generate_full_module",
+                "Gera o modulo completo de migracao a partir de um par .pas + .dfm: " +
+                "7 arquivos Java (Entity, Repository, Service, Resource, DTO, PesquisaDTO, GridVo) + " +
+                "17 arquivos Angular (Module, Routing, Container, Grid, Filtros, Cadastro, Service, HttpService, Models). " +
+                "Opcionalmente salva os arquivos em disco com output_dir.",
+                """
+                {
+                  "type": "object",
+                  "properties": {
+                    "pas_file_path": {"type": "string", "description": "Caminho do arquivo .pas"},
+                    "dfm_file_path": {"type": "string", "description": "Caminho do arquivo .dfm (inferido do .pas se omitido)"},
+                    "package_name": {"type": "string", "description": "Package Java base (ex: logus.corporativo.api.modulo)"},
+                    "output_dir": {"type": "string", "description": "Diretorio para salvar os arquivos gerados (opcional)"}
+                  },
+                  "required": ["pas_file_path", "package_name"]
+                }
+                """
+        );
+        return new McpServerFeatures.SyncToolSpecification(tool, (exchange, args) -> withLogging("generate_full_module", args, () -> {
+                String pasPath = requireString(args, "pas_file_path");
+                String packageName = requireString(args, "package_name");
+                String outputDir = optionalString(args, "output_dir", null);
+
+                // Resolve DFM path
+                String dfmPath = args.containsKey("dfm_file_path")
+                        ? requireString(args, "dfm_file_path")
+                        : pasPath.replaceAll("(?i)\\.pas$", ".dfm");
+
+                // Parse PAS
+                String pasContent = AnalyzeDelphiUnitTool.readFileWithFallback(Path.of(pasPath));
+                DelphiUnit unit = sourceParser.parse(pasContent, pasPath);
+                log.info("  PAS: {} classes, {} métodos, {} queries, {} regras",
+                        unit.getClasses().size(),
+                        unit.getClasses().stream().mapToInt(c -> c.getMethods().size()).sum(),
+                        unit.getSqlQueries().size(), unit.getBusinessRules().size());
+
+                // Parse DFM
+                DfmForm form = null;
+                List<DfmForm.DatasetField> dfmFields = null;
+                if (Files.exists(Path.of(dfmPath))) {
+                    String dfmContent = AnalyzeDelphiUnitTool.readFileWithFallback(Path.of(dfmPath));
+                    form = dfmParser.parse(dfmContent);
+                    dfmFields = form.getDatasetFields();
+                    log.info("  DFM: {} componentes, {} campos dataset, {} colunas grid",
+                            form.getComponents().size(), dfmFields.size(), form.getGridColumns().size());
+                } else {
+                    log.warn("  DFM não encontrado: {}", dfmPath);
+                }
+
+                Map<String, Object> result = new LinkedHashMap<>();
+
+                // ── Java (7 arquivos) ──
+                Map<String, String> javaFiles = new LinkedHashMap<>();
+                for (DelphiClass dc : unit.getClasses()) {
+                    String baseName = dc.getName().replaceAll("^T", "").replaceAll("^(?i)(frm|Frm)", "");
+                    if (baseName.isEmpty()) baseName = dc.getName().replaceAll("^T", "");
+
+                    javaFiles.put(baseName + "Entity.java", javaGenerator.generateEntity(dc, packageName, dfmFields));
+                    javaFiles.put(baseName + "Repository.java", javaGenerator.generateRepository(dc, packageName));
+                    javaFiles.put(baseName + "Service.java", javaGenerator.generateService(dc, packageName, unit.getSqlQueries(), unit.getBusinessRules()));
+                    javaFiles.put(baseName + "Resource.java", javaGenerator.generateController(dc, packageName));
+                    javaFiles.put(baseName + "Dto.java", javaGenerator.generateDto(dc, packageName, dfmFields));
+                    javaFiles.put("Pesquisa" + baseName + "Dto.java", javaGenerator.generatePesquisaDto(dc, packageName, dfmFields));
+                    javaFiles.put(baseName + "GridVo.java", javaGenerator.generateVo(dc, packageName, dfmFields));
+                }
+                result.put("javaFiles", javaFiles);
+
+                // ── Angular (17 arquivos) ──
+                Map<String, String> angularFiles = new LinkedHashMap<>();
+                if (form != null) {
+                    DelphiClass dc = unit.getClasses().isEmpty() ? null : unit.getClasses().get(0);
+                    angularFiles = angularGenerator.generateModule(form, dc);
+                }
+                result.put("angularFiles", angularFiles);
+
+                // ── Resumo ──
+                result.put("summary", Map.of(
+                        "pasFile", pasPath,
+                        "dfmFile", dfmPath,
+                        "javaFilesCount", javaFiles.size(),
+                        "angularFilesCount", angularFiles.size(),
+                        "totalFilesGenerated", javaFiles.size() + angularFiles.size(),
+                        "methods", unit.getClasses().stream().mapToInt(c -> c.getMethods().size()).sum(),
+                        "sqlQueries", unit.getSqlQueries().size(),
+                        "businessRules", unit.getBusinessRules().size(),
+                        "dfmComponents", form != null ? form.getComponents().size() : 0,
+                        "gridColumns", form != null ? form.getGridColumns().size() : 0
+                ));
+
+                // ── Item 10: Salvar em disco ──
+                if (outputDir != null && !outputDir.isBlank()) {
+                    Path outPath = Path.of(outputDir);
+                    int saved = 0;
+
+                    // Java
+                    Path javaPath = outPath.resolve("java");
+                    for (Map.Entry<String, String> e : javaFiles.entrySet()) {
+                        Path filePath = javaPath.resolve(e.getKey());
+                        Files.createDirectories(filePath.getParent());
+                        Files.writeString(filePath, e.getValue(), StandardCharsets.UTF_8);
+                        saved++;
+                    }
+
+                    // Angular
+                    Path angularPath = outPath.resolve("angular");
+                    for (Map.Entry<String, String> e : angularFiles.entrySet()) {
+                        Path filePath = angularPath.resolve(e.getKey());
+                        Files.createDirectories(filePath.getParent());
+                        Files.writeString(filePath, e.getValue(), StandardCharsets.UTF_8);
+                        saved++;
+                    }
+
+                    result.put("outputDir", outputDir);
+                    result.put("filesSavedToDisk", saved);
+                    log.info("  {} arquivos salvos em {}", saved, outputDir);
+                }
+
+                log.info("  Total: {} Java + {} Angular = {} arquivos", javaFiles.size(), angularFiles.size(),
+                        javaFiles.size() + angularFiles.size());
+                return success(result);
+        }));
+    }
+}
