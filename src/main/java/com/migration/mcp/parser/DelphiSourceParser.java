@@ -434,6 +434,23 @@ public class DelphiSourceParser {
                 if (selectCount >= 2) hasBranch = true;
             }
             if (hasBranch) {
+                // Se não tem ifCondition do branchCut, busca todos os ifs no range
+                if (ifCondition == null) {
+                    Pattern allIfs = Pattern.compile("(?i)\\bif\\b\\s*\\(([^)]+)\\)\\s*then\\b");
+                    Matcher allIfM = allIfs.matcher(range);
+                    Set<String> conditions = new LinkedHashSet<>();
+                    while (allIfM.find()) {
+                        String cond = allIfM.group(1).trim();
+                        // Ignora condições de UI (Enabled, Visible, etc.)
+                        if (!cond.contains("Enabled") && !cond.contains("Visible") &&
+                            !cond.contains(".State") && cond.length() < 80) {
+                            conditions.add(cond);
+                        }
+                    }
+                    if (!conditions.isEmpty()) {
+                        ifCondition = String.join(" | ", conditions);
+                    }
+                }
                 String condText = ifCondition != null
                         ? "if (" + ifCondition + ")"
                         : "condição detectada";
