@@ -369,6 +369,13 @@ class GenerateJavaClassTool extends BaseTool {
                             }
                         }
 
+                        // Fix 4: filtrar datasets de filtro (combos, não tabelas reais)
+                        byDataset.entrySet().removeIf(e -> {
+                            String dsLower = e.getKey().toLowerCase();
+                            return dsLower.contains("filtro") || dsLower.contains("combo") ||
+                                   dsLower.contains("lookup") || e.getValue().size() <= 2;
+                        });
+
                         if (byDataset.size() <= 1) {
                             // 1 dataset ou sem DFM → 1 entity
                             String mainTable = extractMainTable(unit.getSqlQueries(), 0);
@@ -383,8 +390,9 @@ class GenerateJavaClassTool extends BaseTool {
                                 // Infere nome da entity: cdsPedido → PedidoAutomatico, cdsProdutos → ItemPedidoAutomatico
                                 String entityName = inferEntityName(dsName, cleanBase);
                                 String table = extractMainTable(unit.getSqlQueries(), sqlIdx++);
+                                // Fix 5: passa entityClassName para que a classe interna tenha o nome correto
                                 generatedFiles.put(entityName + "Entity.java",
-                                        generator.generateEntity(dc, packageName, dsFields, table));
+                                        generator.generateEntity(dc, packageName, dsFields, table, entityName));
                             }
                         }
                     }

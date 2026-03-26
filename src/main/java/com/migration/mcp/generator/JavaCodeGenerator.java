@@ -95,11 +95,33 @@ public class JavaCodeGenerator {
      */
     public String generateEntity(DelphiClass dc, String packageName,
                                   List<DfmForm.DatasetField> dfmFields, String tableName) {
+        return generateEntity(dc, packageName, dfmFields, tableName, null);
+    }
+
+    public String generateEntity(DelphiClass dc, String packageName,
+                                  List<DfmForm.DatasetField> dfmFields, String tableName,
+                                  String entityClassName) {
         StringBuilder sb = new StringBuilder();
         String baseName = cleanClassNameWithProfile(dc.getName());
-        String entityClass = baseName + "Entity";
+        // Fix 5: usar entityClassName passado (para detail entities)
+        String entityClass = entityClassName != null ? entityClassName + "Entity" : baseName + "Entity";
+
+        // Fix 1: consultar knownTables para @Table(name)
         if (tableName == null || tableName.isBlank()) {
-            tableName = toTableName(baseName).toLowerCase();
+            TargetPatterns tp = patterns();
+            if (tp != null) {
+                // Procura tabela correspondente ao baseName no knownTables
+                for (Map.Entry<String, TargetPatterns.TablePattern> e : tp.getKnownTables().entrySet()) {
+                    if (e.getValue().getEntity() != null &&
+                        e.getValue().getEntity().replace("Entity", "").equalsIgnoreCase(baseName)) {
+                        tableName = e.getKey();
+                        break;
+                    }
+                }
+            }
+            if (tableName == null || tableName.isBlank()) {
+                tableName = toTableName(baseName).toLowerCase();
+            }
         }
 
         // ── Imports ──
@@ -152,8 +174,11 @@ public class JavaCodeGenerator {
 
             // Enum com @Convert
             if (f.isEnum) {
+                String converterName = f.converterClassName != null
+                        ? f.converterClassName
+                        : f.enumClassName.replace("Enum", "Converter");
                 sb.append("  @Column(name = \"").append(f.colName).append("\")\n");
-                sb.append("  @Convert(converter = ").append(f.enumClassName.replace("Enum", "Converter")).append(".class)\n");
+                sb.append("  @Convert(converter = ").append(converterName).append(".class)\n");
                 sb.append("  private ").append(f.enumClassName).append(" ").append(f.javaName).append(";\n\n");
                 continue;
             }
@@ -196,6 +221,7 @@ public class JavaCodeGenerator {
         boolean isDate;           // usa LogusDateTime
         boolean isEnum;           // flg_ → enum com @Convert
         String enumClassName;     // ex: SituacaoPedidoAutomaticoEnum
+        String converterClassName; // ex: SituacaoPedidoAutomaticoConverter
         String manyToOneEntity;   // ex: "FilialEntity" se é FK, null se campo simples
         int priority;             // flg_=10, cdg_=5, dcr_=1 (para resolver colisões)
     }
@@ -289,6 +315,7 @@ public class JavaCodeGenerator {
             TargetPatterns.EnumPattern ep = tp.getKnownEnums().get(colName);
             ef.isEnum = true;
             ef.enumClassName = ep.getEnumClass();
+            ef.converterClassName = ep.getConverterClass();
             ef.javaType = ep.getEnumClass();
             ef.priority = 10;
             return ef;
@@ -396,12 +423,20 @@ public class JavaCodeGenerator {
         // Se não removeu nada, retorna snakeToCamel
         if (suffix.equals(colName)) return snakeToCamel(colName);
 
-        // Expande abreviações em cada parte do snake_case
+        // Expande abreviações: patterns primeiro, depois ABBREVIATIONS
         String[] parts = suffix.split("_");
         StringBuilder expanded = new StringBuilder();
+        TargetPatterns tpLocal = patterns();
         for (String part : parts) {
             if (part.isEmpty()) continue;
-            String exp = ABBREVIATIONS.getOrDefault(part.toLowerCase(), part);
+            String exp = null;
+            // Fix 6: consulta patterns para cada parte
+            if (tpLocal != null) {
+                exp = tpLocal.getColumnNameExpansions().get(part.toLowerCase());
+            }
+            if (exp == null) {
+                exp = ABBREVIATIONS.getOrDefault(part.toLowerCase(), part);
+            }
             expanded.append(capitalize(exp));
         }
 
