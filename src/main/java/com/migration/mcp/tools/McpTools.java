@@ -333,24 +333,28 @@ class GenerateJavaClassTool extends BaseTool {
                 for (DelphiClass dc : unit.getClasses()) {
                     String baseName = dc.getName().replaceAll("^T", "");
                     log.info("  Gerando código para classe: {}", baseName);
+                    // Item 5: remove prefixo frm/frmXxx dos nomes de arquivo
+                    String cleanBase = baseName.replaceAll("^(?i)(frm|Frm)", "");
+                    if (cleanBase.isEmpty()) cleanBase = baseName;
+
                     if (generate.contains("entity")) {
-                        generatedFiles.put(baseName + "Entity.java", generator.generateEntity(dc, packageName, finalDfmFields));
+                        generatedFiles.put(cleanBase + "Entity.java", generator.generateEntity(dc, packageName, finalDfmFields));
                     }
                     if (generate.contains("repository")) {
-                        generatedFiles.put(baseName + "Repository.java", generator.generateRepository(dc, packageName));
+                        generatedFiles.put(cleanBase + "Repository.java", generator.generateRepository(dc, packageName));
                     }
                     if (generate.contains("service")) {
-                        generatedFiles.put(baseName + "Service.java", generator.generateService(dc, packageName, unit.getSqlQueries(), unit.getBusinessRules()));
+                        generatedFiles.put(cleanBase + "Service.java", generator.generateService(dc, packageName, unit.getSqlQueries(), unit.getBusinessRules()));
                     }
                     if (generate.contains("controller") || generate.contains("resource")) {
-                        generatedFiles.put(baseName + "Resource.java", generator.generateController(dc, packageName));
+                        generatedFiles.put(cleanBase + "Resource.java", generator.generateController(dc, packageName));
                     }
                     if (generate.contains("dto")) {
-                        generatedFiles.put(baseName + "Dto.java", generator.generateDto(dc, packageName));
-                        generatedFiles.put("Pesquisa" + baseName + "Dto.java", generator.generatePesquisaDto(dc, packageName));
+                        generatedFiles.put(cleanBase + "Dto.java", generator.generateDto(dc, packageName, finalDfmFields));
+                        generatedFiles.put("Pesquisa" + cleanBase + "Dto.java", generator.generatePesquisaDto(dc, packageName, finalDfmFields));
                     }
                     if (generate.contains("vo")) {
-                        generatedFiles.put(baseName + "GridVo.java", generator.generateVo(dc, packageName));
+                        generatedFiles.put(cleanBase + "GridVo.java", generator.generateVo(dc, packageName, finalDfmFields));
                     }
                 }
 

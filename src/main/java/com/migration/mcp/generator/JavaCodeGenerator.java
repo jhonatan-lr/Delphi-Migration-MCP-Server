@@ -408,6 +408,10 @@ public class JavaCodeGenerator {
     // ── DTO ──────────────────────────────────────────────────────────────────
 
     public String generateDto(DelphiClass dc, String packageName) {
+        return generateDto(dc, packageName, null);
+    }
+
+    public String generateDto(DelphiClass dc, String packageName, List<DfmForm.DatasetField> dfmFields) {
         String baseName = cleanClassNameWithProfile(dc.getName());
         String entityClass = baseName + "Entity";
         String dtoName = baseName + "Dto";
@@ -416,20 +420,17 @@ public class JavaCodeGenerator {
         sb.append("package ").append(packageName).append(".dto.").append(toLowerFirst(baseName)).append(";\n\n");
         sb.append("import ").append(packageName).append(".entity.").append(entityClass).append(";\n\n");
         sb.append("import java.io.Serializable;\n");
-        sb.append("import java.math.BigDecimal;\n\n");
+        sb.append("import java.math.BigDecimal;\n");
+        sb.append("import java.util.Date;\n\n");
 
         sb.append("public class ").append(dtoName).append(" implements Serializable {\n\n");
         sb.append("    private static final long serialVersionUID = 1L;\n\n");
         sb.append("    private Integer id;\n");
         sb.append("    private Boolean isEdicao;\n");
 
-        List<String[]> fieldList = new ArrayList<>();
-        for (DelphiField field : dc.getFields()) {
-            if (field.isComponent()) continue;
-            String javaType = mapToApiType(field.getJavaType());
-            String javaField = toCamelCase(removeFieldPrefix(field.getName()));
-            fieldList.add(new String[]{javaType, javaField});
-            sb.append("    private ").append(javaType).append(" ").append(javaField).append(";\n");
+        List<String[]> fieldList = buildFieldList(dc, dfmFields);
+        for (String[] f : fieldList) {
+            sb.append("    private ").append(f[0]).append(" ").append(f[1]).append(";\n");
         }
 
         // Constructors
@@ -461,6 +462,10 @@ public class JavaCodeGenerator {
     // ── PesquisaDto ──────────────────────────────────────────────────────────
 
     public String generatePesquisaDto(DelphiClass dc, String packageName) {
+        return generatePesquisaDto(dc, packageName, null);
+    }
+
+    public String generatePesquisaDto(DelphiClass dc, String packageName, List<DfmForm.DatasetField> dfmFields) {
         String baseName = cleanClassNameWithProfile(dc.getName());
         String pesquisaDtoName = "Pesquisa" + baseName + "Dto";
 
@@ -473,22 +478,18 @@ public class JavaCodeGenerator {
         sb.append("    private static final long serialVersionUID = 1L;\n\n");
         sb.append("    private LazyLoadDto lazyDto;\n");
 
-        // filtros baseados nos campos (tipo String para filtros de pesquisa)
-        for (DelphiField field : dc.getFields()) {
-            if (field.isComponent()) continue;
-            String javaField = toCamelCase(removeFieldPrefix(field.getName()));
-            sb.append("    private String ").append(javaField).append(";\n");
+        List<String[]> fieldList = buildFieldList(dc, dfmFields);
+        for (String[] f : fieldList) {
+            sb.append("    private String ").append(f[1]).append(";\n");
         }
 
         sb.append("\n    public LazyLoadDto getLazyDto() { return lazyDto; }\n");
         sb.append("    public void setLazyDto(LazyLoadDto lazyDto) { this.lazyDto = lazyDto; }\n\n");
 
-        for (DelphiField field : dc.getFields()) {
-            if (field.isComponent()) continue;
-            String javaField = toCamelCase(removeFieldPrefix(field.getName()));
-            String cap = capitalize(javaField);
-            sb.append("    public String get").append(cap).append("() { return ").append(javaField).append("; }\n");
-            sb.append("    public void set").append(cap).append("(String ").append(javaField).append(") { this.").append(javaField).append(" = ").append(javaField).append("; }\n\n");
+        for (String[] f : fieldList) {
+            String cap = capitalize(f[1]);
+            sb.append("    public String get").append(cap).append("() { return ").append(f[1]).append("; }\n");
+            sb.append("    public void set").append(cap).append("(String ").append(f[1]).append(") { this.").append(f[1]).append(" = ").append(f[1]).append("; }\n\n");
         }
 
         sb.append("}\n");
@@ -498,6 +499,10 @@ public class JavaCodeGenerator {
     // ── GridVo ───────────────────────────────────────────────────────────────
 
     public String generateVo(DelphiClass dc, String packageName) {
+        return generateVo(dc, packageName, null);
+    }
+
+    public String generateVo(DelphiClass dc, String packageName, List<DfmForm.DatasetField> dfmFields) {
         String baseName = cleanClassNameWithProfile(dc.getName());
         String entityClass = baseName + "Entity";
         String voName = baseName + "GridVo";
@@ -506,19 +511,17 @@ public class JavaCodeGenerator {
         sb.append("package ").append(packageName).append(".vo.").append(toLowerFirst(baseName)).append(";\n\n");
         sb.append("import ").append(packageName).append(".entity.").append(entityClass).append(";\n\n");
         sb.append("import java.io.Serializable;\n");
-        sb.append("import java.math.BigDecimal;\n\n");
+        sb.append("import java.math.BigDecimal;\n");
+        sb.append("import java.util.Date;\n\n");
 
         sb.append("public class ").append(voName).append(" implements Serializable {\n\n");
         sb.append("    private static final long serialVersionUID = 1L;\n\n");
         sb.append("    private Integer id;\n");
 
-        List<String[]> fieldList = new ArrayList<>();
-        for (DelphiField field : dc.getFields()) {
-            if (field.isComponent()) continue;
-            String javaType = mapToApiType(field.getJavaType());
-            String javaField = toCamelCase(removeFieldPrefix(field.getName()));
-            fieldList.add(new String[]{javaType, javaField});
-            sb.append("    private ").append(javaType).append(" ").append(javaField).append(";\n");
+        // VO usa apenas campos visíveis (se veio do DFM)
+        List<String[]> fieldList = buildFieldList(dc, dfmFields, true);
+        for (String[] f : fieldList) {
+            sb.append("    private ").append(f[0]).append(" ").append(f[1]).append(";\n");
         }
 
         // Constructor from Entity
@@ -542,6 +545,38 @@ public class JavaCodeGenerator {
 
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /** Monta lista de campos: primeiro tenta DelphiClass, se vazio usa dfmFields */
+    private List<String[]> buildFieldList(DelphiClass dc, List<DfmForm.DatasetField> dfmFields) {
+        return buildFieldList(dc, dfmFields, false);
+    }
+
+    private List<String[]> buildFieldList(DelphiClass dc, List<DfmForm.DatasetField> dfmFields, boolean onlyVisible) {
+        List<String[]> fieldList = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+
+        // Tenta do DelphiClass
+        for (DelphiField field : dc.getFields()) {
+            if (field.isComponent()) continue;
+            String javaType = mapToApiType(field.getJavaType());
+            String javaField = toCamelCase(removeFieldPrefix(field.getName()));
+            if (!javaField.isEmpty() && !javaField.equals("id") && seen.add(javaField)) {
+                fieldList.add(new String[]{javaType, javaField});
+            }
+        }
+
+        // Fallback: usa DFM fields
+        if (fieldList.isEmpty() && dfmFields != null) {
+            for (DfmForm.DatasetField df : dfmFields) {
+                if (onlyVisible && !df.isVisible()) continue;
+                String javaField = snakeToCamel(df.getName());
+                if (!javaField.isEmpty() && !javaField.equals("id") && seen.add(javaField)) {
+                    fieldList.add(new String[]{df.getJavaType(), javaField});
+                }
+            }
+        }
+        return fieldList;
     }
 
     // ── Utils ────────────────────────────────────────────────────────────────

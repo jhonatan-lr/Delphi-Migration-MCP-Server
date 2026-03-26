@@ -146,10 +146,10 @@ public class DfmFormParser {
             form.setFormType(m.group(2));
         }
 
-        // Caption
-        Pattern captionPat = Pattern.compile("(?i)Caption\\s*=\\s*'([^']*)'");
+        // Caption — decodifica caracteres Delphi
+        Pattern captionPat = Pattern.compile("(?i)Caption\\s*=\\s*([^\n]+)");
         Matcher cm = captionPat.matcher(content);
-        if (cm.find()) form.setCaption(cm.group(1));
+        if (cm.find()) form.setCaption(decodeDfmString(cm.group(1).trim().replaceAll("^'|'$", "")));
 
         // Width / Height
         Pattern widthPat = Pattern.compile("(?i)\\bWidth\\s*=\\s*(\\d+)");
@@ -217,18 +217,30 @@ public class DfmFormParser {
                 "ReadOnly", "Required", "MaxLength", "TabOrder", "Color", "Font"};
 
         for (String prop : relevantProps) {
-            Pattern p = Pattern.compile("(?i)" + prop + "\\s*=\\s*([^\n]+)");
+            Pattern p = Pattern.compile("(?i)\\b" + prop + "\\s*=\\s*([^\n]+)");
             Matcher m = p.matcher(block);
-            if (m.find()) props.put(prop, m.group(1).trim().replaceAll("^'|'$", ""));
+            if (m.find()) {
+                String val = m.group(1).trim().replaceAll("^'|'$", "");
+                // Item 6: decodifica captions Delphi (#231#227 → ção)
+                if (val.contains("#")) val = decodeDfmString(val);
+                props.put(prop, val);
+            }
         }
         return props;
     }
 
     private List<String> extractEvents(String block) {
         List<String> events = new ArrayList<>();
-        Pattern ep = Pattern.compile("(?i)(On\\w+)\\s*=\\s*(\\w+)");
+        // Item 7: pattern mais restritivo — On seguido de letra maiúscula + pelo menos 3 chars
+        Pattern ep = Pattern.compile("\\b(On[A-Z]\\w{2,})\\s*=\\s*(\\w+)");
         Matcher m = ep.matcher(block);
-        while (m.find()) events.add(m.group(1) + " → " + m.group(2));
+        while (m.find()) {
+            String evtName = m.group(1);
+            String handler = m.group(2);
+            // Filtra falsos positivos: propriedades que começam com "On" mas não são eventos
+            if (evtName.matches("(?i)OnWidth|OnHeight|OnTop|OnLeft")) continue;
+            events.add(evtName + " → " + handler);
+        }
         return events;
     }
 
@@ -242,23 +254,35 @@ public class DfmFormParser {
         List<DfmForm.GridColumn> columns = new ArrayList<>();
         // Encontra bloco Selected.Strings = (...)
         Pattern selectedPat = Pattern.compile(
-                "(?i)Selected\\.Strings\\s*=\\s*\\(([^)]+)\\)", Pattern.DOTALL);
+                "(?i)Selected\\.Strings\\s*=\\s*\\(([\\s\\S]*?)\\)", Pattern.DOTALL);
         Matcher m = selectedPat.matcher(content);
         while (m.find()) {
             String block = m.group(1);
-            // Cada linha: 'field\twidth\theader\tF\tsubheader'
-            Pattern linePat = Pattern.compile("'([^']+)'");
-            Matcher lm = linePat.matcher(block);
-            while (lm.find()) {
-                String line = lm.group(1);
-                String[] parts = line.split("\t");
+            // No DFM, cada linha usa #9 como tab: 'field'#9'width'#9'Header'#9'F'#9'SubHeader'
+            // Primeiro normaliza: junta fragmentos 'xxx'#9'yyy' em uma string com tab
+            String[] lines = block.split("\n");
+            for (String rawLine : lines) {
+                String line = rawLine.trim();
+                if (line.isEmpty()) continue;
+                // Remove aspas e substitui #9 por tab, remove + de concatenação
+                String normalized = line.replaceAll("'\\s*#9\\s*'", "\t")
+                                        .replaceAll("^'|'$", "")
+                                        .replaceAll("\\+\\s*$", "")
+                                        .trim();
+                // Também tenta tab literal
+                if (!normalized.contains("\t")) {
+                    normalized = line.replaceAll("'", "").trim();
+                    // Tenta separar por 2+ espaços
+                    if (!normalized.contains("\t")) continue;
+                }
+                String[] parts = normalized.split("\t");
                 if (parts.length >= 3) {
                     String field = parts[0].trim();
                     int width = 10;
                     try { width = Integer.parseInt(parts[1].trim()); } catch (Exception ignored) {}
-                    String header = parts[2].trim();
-                    String subHeader = parts.length >= 5 ? parts[4].trim() : "";
-                    // Pula campos de 1 char de largura (geralmente ícones/flags visuais)
+                    String header = decodeDfmString(parts[2].trim());
+                    String subHeader = parts.length >= 5 ? decodeDfmString(parts[4].trim()) : "";
+                    // Pula campos de 1 char de largura sem header (ícones visuais)
                     if (width <= 1 && header.trim().isEmpty()) continue;
                     columns.add(new DfmForm.GridColumn(field, header, subHeader, width));
                 }
@@ -682,5 +706,32 @@ public class DfmFormParser {
 
     public static Map<String, String> getComponentMap() {
         return Collections.unmodifiableMap(COMPONENT_MAP);
+    }
+
+    /** Decodifica strings Delphi com caracteres especiais: 'Manuten'#231#227'o' → 'Manutenção' */
+    static String decodeDfmString(String s) {
+        if (s == null || !s.contains("#")) return s;
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        while (i < s.length()) {
+            if (s.charAt(i) == '#' && i + 1 < s.length() && Character.isDigit(s.charAt(i + 1))) {
+                // Coleta dígitos após #
+                int j = i + 1;
+                while (j < s.length() && Character.isDigit(s.charAt(j))) j++;
+                try {
+                    int code = Integer.parseInt(s.substring(i + 1, j));
+                    sb.append((char) code);
+                } catch (NumberFormatException e) {
+                    sb.append(s, i, j);
+                }
+                i = j;
+            } else if (s.charAt(i) == '\'') {
+                i++; // pula aspas simples usadas como delimitadores
+            } else {
+                sb.append(s.charAt(i));
+                i++;
+            }
+        }
+        return sb.toString();
     }
 }
