@@ -583,12 +583,46 @@ public class DelphiSourceParser {
 
     private String generateValidationJava(String condition, String action) {
         String msg = "";
-        Matcher msgM = Pattern.compile("['\"]([^'\"]+)['\"]").matcher(action);
+        Matcher msgM = Pattern.compile("'([^']+)'").matcher(action);
         if (msgM.find()) msg = msgM.group(1);
 
-        return "// Java equivalente\n" +
-               "if (" + condition.trim().replace(":=", "=") + ") {\n" +
-               "    throw new BusinessException(\"" + msg + "\");\n" +
+        String cond = condition.trim();
+
+        // Detecta padrões que são UI/frontend (não migrar para Service)
+        if (cond.contains("TLogusMessage.Confirm") || cond.contains("MessageDlg") ||
+            cond.contains("Application.MessageBox")) {
+            // Extrai a mensagem da confirmação
+            Matcher confirmMsg = Pattern.compile("'([^']+)'").matcher(cond);
+            String confirmText = confirmMsg.find() ? confirmMsg.group(1) : msg;
+            return "// ⚠️ FRONTEND: Confirmação do usuário — implementar no Angular (dialog/confirm)\n" +
+                   "// Mensagem: \"" + confirmText + "\"\n" +
+                   "// No Angular: usar ConfirmationService do PrimeNG\n" +
+                   "// this.confirmationService.confirm({ message: '" + confirmText + "', accept: () => { ... } });";
+        }
+
+        // Detecta ShowMessage/Warning (apenas exibição, não validação de backend)
+        if (cond.contains("ShowMessage") || action.contains("ShowMessage") ||
+            cond.contains("TLogusMessage.Warning")) {
+            return "// ⚠️ FRONTEND: Mensagem de aviso — implementar no Angular\n" +
+                   "// this.messageService.add({ severity: 'warn', summary: 'Aviso', detail: '" + msg + "' });";
+        }
+
+        // Detecta isEmpty (validação real de backend)
+        if (cond.contains("IsEmpty") || cond.contains(".IsEmpty")) {
+            String entity = cond.replaceAll(".*?(\\w+)\\.IsEmpty.*", "$1");
+            return "// Validação backend\n" +
+                   "if (lista == null || lista.isEmpty()) {\n" +
+                   "    throw new ValidationException(\"Nenhum registro encontrado.\");\n" +
+                   "}";
+        }
+
+        // Validação genérica
+        String javaCond = cond.replace("not ", "!")
+                              .replace("(!", "(!")
+                              .replace(":=", "=");
+        return "// Validação backend\n" +
+               "if (" + javaCond + ") {\n" +
+               "    throw new ValidationException(\"" + (msg.isEmpty() ? "Validação falhou" : msg) + "\");\n" +
                "}";
     }
 

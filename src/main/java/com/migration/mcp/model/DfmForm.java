@@ -57,12 +57,14 @@ public class DfmForm {
         public DatasetField(String name, String delphiType) {
             this.name = name;
             this.delphiType = delphiType;
-            this.javaType = mapToJava(delphiType);
-            this.tsType = mapToTs(delphiType);
+            this.javaType = mapToJava(name, delphiType);
+            this.tsType = mapToTs(name, delphiType);
         }
 
-        private String mapToJava(String dt) {
+        private String mapToJava(String fieldName, String dt) {
             if (dt == null) return "String";
+            // Campos com prefixo cdg_ e nmr_ são códigos/números inteiros, mesmo se TFloatField
+            if (fieldName != null && (fieldName.startsWith("cdg_") || fieldName.startsWith("nmr_"))) return "Integer";
             if (dt.contains("Integer") || dt.contains("Smallint")) return "Integer";
             if (dt.contains("Float") || dt.contains("Currency") || dt.contains("BCD")) return "BigDecimal";
             if (dt.contains("Date") || dt.contains("Time") || dt.contains("Timestamp")) return "Date";
@@ -70,8 +72,9 @@ public class DfmForm {
             return "String";
         }
 
-        private String mapToTs(String dt) {
+        private String mapToTs(String fieldName, String dt) {
             if (dt == null) return "string";
+            if (fieldName != null && (fieldName.startsWith("cdg_") || fieldName.startsWith("nmr_"))) return "number";
             if (dt.contains("Integer") || dt.contains("Smallint") || dt.contains("Float") ||
                 dt.contains("Currency") || dt.contains("BCD")) return "number";
             if (dt.contains("Date") || dt.contains("Time") || dt.contains("Timestamp")) return "string";
