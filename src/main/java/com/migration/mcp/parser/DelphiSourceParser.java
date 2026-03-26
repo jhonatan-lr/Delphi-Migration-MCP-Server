@@ -340,8 +340,17 @@ public class DelphiSourceParser {
      * Retorna lista de SqlFragment: cada um com o SQL e a condição (se houver).
      */
     private List<SqlFragment> extractSqlFragmentsFromRange(String src, int start, int end) {
-        // Expande o start para trás (até 300 chars) para capturar o if antes do primeiro SQL.Add
-        int expandedStart = Math.max(0, start - 300);
+        // Expande o start para trás até o begin/procedure/function mais próximo
+        // para capturar o if antes do primeiro SQL.Add
+        int expandedStart = start;
+        String before = src.substring(Math.max(0, start - 500), start);
+        // Procura o último begin, procedure ou function antes do start
+        int lastBegin = Math.max(
+                before.lastIndexOf("begin"),
+                Math.max(before.lastIndexOf("procedure"), before.lastIndexOf("function")));
+        if (lastBegin >= 0) {
+            expandedStart = Math.max(0, start - 500) + lastBegin;
+        }
         String range = src.substring(expandedStart, Math.min(end, src.length()));
         List<SqlFragment> fragments = new ArrayList<>();
 
