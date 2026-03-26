@@ -106,30 +106,46 @@ public class JavaCodeGenerator {
         // Fix 5: usar entityClassName passado (para detail entities)
         String entityClass = entityClassName != null ? entityClassName + "Entity" : baseName + "Entity";
 
-        // Fix 1: SEMPRE consultar knownTables para @Table(name) — mesmo se tableName foi passado
+        // Resolver @Table(name) consultando knownTables
         {
             TargetPatterns tp = patterns();
+            String resolved = null;
             if (tp != null) {
                 String lookupName = entityClassName != null ? entityClassName : baseName;
-                String found = null;
-                // Busca pelo entityClass no knownTables (match exato ou parcial)
+
+                // 1. Match exato pelo nome da entity
                 for (Map.Entry<String, TargetPatterns.TablePattern> e : tp.getKnownTables().entrySet()) {
                     if (e.getValue().getEntity() != null) {
                         String eName = e.getValue().getEntity().replace("Entity", "");
-                        // Match exato
                         if (eName.equalsIgnoreCase(lookupName) || eName.equalsIgnoreCase(baseName)) {
-                            found = e.getKey();
+                            resolved = e.getKey();
                             break;
-                        }
-                        // Match parcial: "ItemManutencaoPedidoAutomatico" contém "ItemPedidoAutomatico"
-                        if (lookupName.toLowerCase().contains(eName.toLowerCase()) && eName.length() > 5) {
-                            found = e.getKey();
-                            // Não break — pode ter match melhor
                         }
                     }
                 }
-                if (found != null) tableName = found;
+
+                // 2. Match pelos campos do dataset: se os campos batem com a PK de uma tabela
+                if (resolved == null && dfmFields != null) {
+                    Set<String> fieldNames = new HashSet<>();
+                    for (DfmForm.DatasetField df : dfmFields) fieldNames.add(df.getName().toLowerCase());
+
+                    for (Map.Entry<String, TargetPatterns.TablePattern> e : tp.getKnownTables().entrySet()) {
+                        String pk = e.getValue().getPk();
+                        if (pk != null && fieldNames.contains(pk.toLowerCase())) {
+                            // Verifica se não é a PK de outra tabela que também tem esse campo como FK
+                            // Se o campo é o primeiro cdg_* do dataset, é provavelmente a PK
+                            for (DfmForm.DatasetField df : dfmFields) {
+                                if (df.getName().equalsIgnoreCase(pk)) {
+                                    resolved = e.getKey();
+                                    break;
+                                }
+                            }
+                            if (resolved != null) break;
+                        }
+                    }
+                }
             }
+            if (resolved != null) tableName = resolved;
             if (tableName == null || tableName.isBlank()) {
                 tableName = toTableName(baseName).toLowerCase();
             }
