@@ -804,6 +804,43 @@ class GenerateFullModuleTool extends BaseTool {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// TOOL: load_target_patterns — Carrega entity-patterns.json
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class LoadTargetPatternsTool extends BaseTool {
+    @Override
+    public McpServerFeatures.SyncToolSpecification getSpecification() {
+        McpSchema.Tool tool = new McpSchema.Tool(
+                "load_target_patterns",
+                "Carrega entity-patterns.json com regras do projeto alvo: expansão de abreviações, " +
+                "FKs conhecidas, enums, tabelas e relacionamentos master-detail. " +
+                "Se não informar file_path, carrega de ~/.delphi-mcp/entity-patterns.json automaticamente.",
+                """
+                {
+                  "type": "object",
+                  "properties": {
+                    "file_path": {"type": "string", "description": "Caminho do entity-patterns.json (opcional)"}
+                  }
+                }
+                """
+        );
+        return new McpServerFeatures.SyncToolSpecification(tool, (exchange, args) -> withLogging("load_target_patterns", args, () -> {
+                String filePath = optionalString(args, "file_path", null);
+                ProjectProfileStore store = ProjectProfileStore.getInstance();
+                store.loadPatterns(filePath);
+                TargetPatterns tp = store.getPatterns();
+                return success(Map.of(
+                        "status", "Patterns carregados com sucesso",
+                        "columnNameExpansions", tp.getColumnNameExpansions().size(),
+                        "knownForeignKeys", tp.getKnownForeignKeys().size(),
+                        "knownEnums", tp.getKnownEnums().size(),
+                        "knownTables", tp.getKnownTables().size(),
+                        "masterDetailRelationships", tp.getMasterDetailRelationships().size()
+                ));
+        }));
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // TOOL: get_usage_guide — Manual de uso para agentes de IA
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 class GetUsageGuideTool extends BaseTool {

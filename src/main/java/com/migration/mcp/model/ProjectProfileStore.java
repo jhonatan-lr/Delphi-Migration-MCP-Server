@@ -37,14 +37,20 @@ public class ProjectProfileStore {
     // INSTANCE deve vir DEPOIS do static block para que PROFILE_FILE já esteja inicializado
     private static final ProjectProfileStore INSTANCE = new ProjectProfileStore();
 
+    private static final Path PATTERNS_FILE = PROFILE_DIR != null ? PROFILE_DIR.resolve("entity-patterns.json") : null;
+
     private final ObjectMapper mapper;
     private ProjectProfile current;
+    private TargetPatterns patterns;
 
     private ProjectProfileStore() {
         this.mapper = new ObjectMapper()
-                .enable(SerializationFeature.INDENT_OUTPUT);
+                .enable(SerializationFeature.INDENT_OUTPUT)
+                .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         this.current = loadFromDisk();
-        log.info("ProfileStore inicializado — dir={}, perfilCarregado={}", PROFILE_DIR, current != null);
+        this.patterns = loadPatternsFromDisk();
+        log.info("ProfileStore inicializado — dir={}, perfilCarregado={}, patternsCarregado={}",
+                PROFILE_DIR, current != null, patterns != null);
     }
 
     public static ProjectProfileStore getInstance() {
@@ -117,6 +123,39 @@ public class ProjectProfileStore {
                 .toLowerCase()
                 .replaceAll("[^a-z0-9]", ".");
         return "br.com." + name;
+    }
+
+    // ── Target Patterns ─────────────────────────────────────────────────────
+
+    public TargetPatterns getPatterns() { return patterns; }
+
+    public boolean hasPatterns() { return patterns != null; }
+
+    public void loadPatterns(String filePath) throws IOException {
+        Path path = filePath != null ? Path.of(filePath) : PATTERNS_FILE;
+        if (path != null && Files.exists(path)) {
+            this.patterns = mapper.readValue(path.toFile(), TargetPatterns.class);
+            log.info("Patterns carregados: {} expansions, {} FKs, {} enums, {} tables",
+                    patterns.getColumnNameExpansions().size(),
+                    patterns.getKnownForeignKeys().size(),
+                    patterns.getKnownEnums().size(),
+                    patterns.getKnownTables().size());
+        } else {
+            throw new IOException("Arquivo de patterns não encontrado: " + path);
+        }
+    }
+
+    private TargetPatterns loadPatternsFromDisk() {
+        if (PATTERNS_FILE == null || !Files.exists(PATTERNS_FILE)) return null;
+        try {
+            TargetPatterns p = mapper.readValue(PATTERNS_FILE.toFile(), TargetPatterns.class);
+            log.info("Patterns carregados do disco: {} expansions, {} FKs",
+                    p.getColumnNameExpansions().size(), p.getKnownForeignKeys().size());
+            return p;
+        } catch (IOException e) {
+            log.warn("Não foi possível carregar patterns: {}", e.getMessage());
+            return null;
+        }
     }
 
     // ── Persistência ─────────────────────────────────────────────────────────

@@ -245,6 +245,11 @@ public class JavaCodeGenerator {
         }
     }
 
+    /** Retorna o TargetPatterns carregado (ou null) */
+    private TargetPatterns patterns() {
+        return ProjectProfileStore.getInstance().getPatterns();
+    }
+
     /** Mapeia um campo Delphi para EntityField com nome descritivo e tipo correto */
     private EntityField mapToEntityField(String colName, String delphiType) {
         if (colName == null || colName.isBlank()) return null;
@@ -253,14 +258,39 @@ public class JavaCodeGenerator {
         EntityField ef = new EntityField();
         ef.colName = colName;
 
-        // Nome Java descritivo: remove prefixo técnico e expande abreviações
+        // Nome Java descritivo: primeiro tenta patterns, depois heurística
         ef.javaName = toDescriptiveJavaName(colName);
 
-        // @ManyToOne para FKs conhecidas
-        if (KNOWN_FK_ENTITIES.containsKey(colName)) {
-            ef.manyToOneEntity = KNOWN_FK_ENTITIES.get(colName);
+        TargetPatterns tp = patterns();
+
+        // String FKs (CNPJ, códigos texto) — não são @ManyToOne
+        if (tp != null && tp.getStringForeignKeys().contains(colName)) {
+            ef.javaType = "String";
+            ef.priority = 5;
+            return ef;
+        }
+
+        // @ManyToOne: primeiro tenta patterns, depois fallback KNOWN_FK_ENTITIES
+        String fkEntity = null;
+        if (tp != null && tp.getKnownForeignKeys().containsKey(colName)) {
+            fkEntity = tp.getKnownForeignKeys().get(colName);
+        } else if (KNOWN_FK_ENTITIES.containsKey(colName)) {
+            fkEntity = KNOWN_FK_ENTITIES.get(colName);
+        }
+        if (fkEntity != null) {
+            ef.manyToOneEntity = fkEntity;
             ef.javaName = colName.replace("cdg_", "").replace("_", "");
-            // ex: cdg_filial → filial
+            ef.priority = 5;
+            return ef;
+        }
+
+        // Enum: primeiro tenta patterns
+        if (tp != null && tp.getKnownEnums().containsKey(colName)) {
+            TargetPatterns.EnumPattern ep = tp.getKnownEnums().get(colName);
+            ef.isEnum = true;
+            ef.enumClassName = ep.getEnumClass();
+            ef.javaType = ep.getEnumClass();
+            ef.priority = 10;
             return ef;
         }
 
@@ -330,6 +360,25 @@ public class JavaCodeGenerator {
 
     /** Converte nome de coluna técnico para nome Java descritivo */
     private String toDescriptiveJavaName(String colName) {
+        // 1. Tenta match exato no patterns (mais preciso)
+        TargetPatterns tp = patterns();
+        if (tp != null) {
+            // Tenta o sufixo sem prefixo técnico (ex: "canc_pend_auto" de "flb_canc_pend_auto")
+            String suffixForLookup = colName.replaceAll("^(cdg_|dcr_|nmr_|dat_|qtd_|val_|pct_|flb_|flg_|sgl_)", "");
+            String expanded = tp.getColumnNameExpansions().get(suffixForLookup);
+            if (expanded != null) {
+                // Adiciona prefixo descritivo se necessário
+                if (colName.startsWith("dat_")) return "data" + capitalize(expanded);
+                if (colName.startsWith("nmr_")) return "numero" + capitalize(expanded);
+                if (colName.startsWith("qtd_")) return "quantidade" + capitalize(expanded);
+                if (colName.startsWith("val_")) return "valor" + capitalize(expanded);
+                if (colName.startsWith("pct_")) return "percentual" + capitalize(expanded);
+                if (colName.startsWith("sgl_")) return "sigla" + capitalize(expanded);
+                return expanded;
+            }
+        }
+
+        // 2. Fallback: heurística de prefixo + ABBREVIATIONS
         // Remove prefixo técnico
         String suffix = colName;
         String prefix = "";
@@ -367,8 +416,13 @@ public class JavaCodeGenerator {
         return result;
     }
 
-    /** Detecta a coluna PK baseado no nome da tabela e campos disponíveis */
+    /** Detecta a coluna PK — primeiro tenta patterns, depois heurística */
     private String detectPkColumn(List<EntityField> fields, String tableName) {
+        // Tenta patterns
+        TargetPatterns tp = patterns();
+        if (tp != null && tableName != null && tp.getKnownTables().containsKey(tableName)) {
+            return tp.getKnownTables().get(tableName).getPk();
+        }
         // Procura campo cdg_ que parece ser PK
         for (EntityField f : fields) {
             if (f.colName.startsWith("cdg_") && f.colName.contains("_ped_") && !f.colName.contains("filial")) {
