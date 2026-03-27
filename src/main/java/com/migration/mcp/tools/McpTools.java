@@ -1566,16 +1566,42 @@ extract_business_rules(file_path: "C:\\projeto\\f_MinhaTela.pas")
 Os geradores `generate_full_module` e `generate_angular_component` extraem automaticamente \
 todas as 10 seções do `extract_business_rules` e usam para enriquecer o código gerado:
 
-### Angular — o que muda com o contexto
-| Seção usada | Onde aplica | Resultado |
-|---|---|---|
-| `fieldValidationRules` | Filtros + Cadastro `buildFormGroup()` | `Validators.required`, `Validators.pattern`, `minLength`/`maxLength` |
-| `formInitialization` | Filtros `buildFormGroup()` defaults | `new Date()`, `Date - 30`, combos `[1, 2]` |
-| `formInitialization` | Filtros lifecycle | `ngAfterViewInit` com `setTimeout` se houver autoLoad |
-| `calcCellColorRules` | Grid component | `getColorClass(value)` + legenda com emojis no HTML |
-| `columnNameExpansions` | Todos os campos | `cdg_ped_auto` → `codigoPedidoAutomatico` (nomes humanizados) |
+### Angular — buildFormGroup() enriquecido
+O gerador monta cada formControl combinando defaults + validators do AnalysisContext:
 
-### Angular — melhorias no template gerado
+| Fonte | Exemplo Delphi | TypeScript gerado |
+|---|---|---|
+| `formInitialization.defaultValues` Conexao.Date | `edtDataEmissaoDe.Date := Conexao.Date` | `[new Date()]` |
+| `formInitialization.defaultValues` Date - N | `edtDataEmissaoDe.Date := Conexao.Date - 30` | `[new Date(Date.now() - 30 * 86400000)]` |
+| `formInitialization.defaultValues` Date + N | `Conexao.Date + 7` | `[new Date(Date.now() + 7 * 86400000)]` |
+| `formInitialization.defaultValues` vHoje/vDataServidor | `edtDataFinal.Date := vHoje` | `[new Date()]` |
+| `formInitialization.comboPreselections` numérico | `selectedKeys: ["1", "2"]` | `[[1, 2]]` |
+| `formInitialization.comboPreselections` único | `selectedKeys: ["1"]` | `[1]` |
+| `formInitialization.comboPreselections` expressão | `TMissao.Parse...` | `[null /* TODO: ... */]` |
+| `fieldValidationRules` required | `edtDataEmissaoDe` required | `, [Validators.required]` |
+| `fieldValidationRules` pattern | `edtNumeroPedido` numeric_only | `, [Validators.pattern('^[0-9]*$')]` |
+| `fieldValidationRules` custom | `maxDateRange(90)` | Ignorado (não inline) |
+
+Regras de combinação:
+- Default + validator: `edtDataEmissaoDe: [new Date(), [Validators.required]]`
+- Só validator: `edtNumeroPedido: [null, [Validators.pattern('^[0-9]*$')]]`
+- Só default: `lucSituacaoPedido: [[1, 2]]`
+- Sem nada: `lucSecao: [null]`
+- Branch condicional (`$IFOPT D+`): último entry vence (release)
+- Validators deduplicados por campo (mesmo required de 2 métodos = 1 entrada)
+
+### Angular — componentes gerados no padrão real
+| Componente | O que gera |
+|---|---|
+| **Service** | BehaviorSubject com `getGrid()`, `getSelecionado()`, `changePage()`, `handlePesquisar/Salvar/DesativarOuAtivar` |
+| **Container** | Pages enum, `[hidden]` filtros/grid, `*ngIf` cadastro, `initListners` erro+page |
+| **Grid** | `buildDataGridItem()` com cells reais, `initColunas()` com widths%, `ChangeDetectorRef` |
+| **Filtros** | `ngAfterViewInit` com `setTimeout` se autoLoad, `app-filtro` com `emmitPesquisar` |
+| **Cadastro** | Validators nos campos, `ask-obrigatorio`, `app-validation-message` |
+| **HTTP Service** | `URL_API` de `app/startup.service`, `const URL`, endpoints reais |
+| **Pages** | Enum `Inicio/Novo/Editar` |
+
+### Angular — melhorias no template
 | Aspecto | Antes | Agora |
 |---|---|---|
 | CSS | `class="form-control"` | `class="uppercase"`, `logus-row`, `border-bottom` |
