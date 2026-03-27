@@ -1561,6 +1561,28 @@ Exemplo de uso:
 extract_business_rules(file_path: "C:\\projeto\\f_MinhaTela.pas")
 ```
 
+## Geradores consomem AnalysisContext
+
+Os geradores `generate_full_module` e `generate_angular_component` extraem automaticamente \
+todas as 10 seções do `extract_business_rules` e usam para enriquecer o código gerado:
+
+### Angular — o que muda com o contexto
+| Seção usada | Onde aplica | Resultado |
+|---|---|---|
+| `fieldValidationRules` | Filtros + Cadastro `buildFormGroup()` | `Validators.required`, `Validators.pattern`, `minLength`/`maxLength` |
+| `formInitialization` | Filtros `buildFormGroup()` defaults | `dataEmissaoDe: [new Date()]`, combos com `[1, 2]` |
+| `formInitialization` | Filtros `ngOnInit()` | `handlePesquisar()` só se houver autoLoad no FormShow |
+| `calcCellColorRules` | Grid component | Método `getColorClass(value)` com switch/case pronto |
+
+### Java — o que muda com o contexto
+| Seção usada | Onde aplica | Resultado |
+|---|---|---|
+| `datasetEventRules` | Service `save()` | Comentários com defaults de novo registro (AfterInsert) |
+| `transactionBoundaries` | Service `save()` | Comentários com operações da transação original |
+
+Sem o contexto (ex: chamando `generate_angular_component` sem `pas_file_path`), \
+o código é gerado no formato padrão — os campos ficam com `[null]` e sem validators.
+
 ## Entity Patterns (entity-patterns.json)
 
 ### O que é
