@@ -46,6 +46,7 @@ public class AngularCodeGenerator {
         files.put(kebab + "/" + kebab + ".routing.ts", genRouting(baseName, kebab));
         files.put(kebab + "/models/" + kebab + ".model.ts", genModel(baseName, dc, form));
         files.put(kebab + "/models/pesquisa-" + kebab + ".model.ts", genPesquisaModel(baseName, dc, form));
+        files.put(kebab + "/models/" + kebab + ".pages.ts", genPages(baseName));
         files.put(kebab + "/services/" + kebab + ".service.ts", genService(baseName, kebab, dc, form));
         files.put("modules/shared/services/http/http-" + kebab + ".service.ts", genHttpService(baseName, kebab));
         files.put(kebab + "/components/" + kebab + "-container/" + kebab + "-container.component.ts", genContainer(baseName, kebab));
@@ -141,178 +142,262 @@ public class AngularCodeGenerator {
 
     private String genService(String name, String kebab, DelphiClass dc, DfmForm form) {
         String pascal = toPascalCase(name);
-        return "import { Injectable } from '@angular/core';\n" +
-               "import { BehaviorSubject } from 'rxjs';\n" +
-               "import { first } from 'rxjs/operators';\n" +
-               "import { Http" + pascal + "Service } from 'app/modules/shared/services/http/http-" + kebab + ".service';\n" +
-               "import { " + pascal + "Model } from '../models/" + kebab + ".model';\n" +
-               "import { Pesquisa" + pascal + "Model } from '../models/pesquisa-" + kebab + ".model';\n" +
-               "import { Result } from '@shared/models/result.model';\n" +
-               "import { Title } from '@shared/services/custom-title.service';\n" +
-               "import { LoaderService } from '@shared/services/loader.service';\n" +
-               "import { SharedMessageService } from '@shared/services/shared-message.service';\n" +
-               "import { ErroDispacherService } from '@shared/services/erro-dispacher.service';\n" +
-               "import { UtilsService } from '@shared/services/utils.service';\n" +
-               "import { TipoTitulo } from '@shared/models/tipo-titulo.enum';\n\n" +
-               "@Injectable({ providedIn: 'root' })\n" +
-               "export class " + pascal + "Service {\n\n" +
-               "  private tituloSubject = new BehaviorSubject<string>('" + pascal + "');\n" +
-               "  titulo$ = this.tituloSubject.asObservable();\n\n" +
-               "  private gridSubject = new BehaviorSubject<Result<" + pascal + "Model>>(null);\n" +
-               "  grid$ = this.gridSubject.asObservable();\n\n" +
-               "  private selecionadoSubject = new BehaviorSubject<" + pascal + "Model>(null);\n" +
-               "  selecionado$ = this.selecionadoSubject.asObservable();\n\n" +
-               "  private alterarEditarSubject = new BehaviorSubject<boolean>(false);\n" +
-               "  alterarEditar$ = this.alterarEditarSubject.asObservable();\n\n" +
-               "  private filtros: Pesquisa" + pascal + "Model = {};\n\n" +
-               "  constructor(\n" +
-               "    private httpService: Http" + pascal + "Service,\n" +
-               "    private title: Title,\n" +
-               "    private loader: LoaderService,\n" +
-               "    private message: SharedMessageService,\n" +
-               "    private erroDispacher: ErroDispacherService,\n" +
-               "    private utils: UtilsService\n" +
-               "  ) { }\n\n" +
-               "  handlePesquisar(filtros: Pesquisa" + pascal + "Model): void {\n" +
-               "    this.filtros = filtros;\n" +
-               "    this.loader.setLoading(true);\n" +
-               "    this.httpService.pesquisar(filtros).pipe(first()).subscribe(\n" +
-               "      (res) => { this.gridSubject.next(res); this.loader.setLoading(false); },\n" +
-               "      (err) => { this.erroDispacher.dispatch(err); this.loader.setLoading(false); }\n" +
-               "    );\n" +
-               "  }\n\n" +
-               "  loadLazy(event: any): void {\n" +
-               "    this.filtros.lazyDto = this.utils.getLazyDto(event);\n" +
-               "    this.handlePesquisar(this.filtros);\n" +
-               "  }\n\n" +
-               "  handleSalvar(model: " + pascal + "Model): void {\n" +
-               "    this.loader.setLoading(true);\n" +
-               "    this.httpService.save(model).pipe(first()).subscribe(\n" +
-               "      () => {\n" +
-               "        this.message.showSuccess('Registro salvo com sucesso.');\n" +
-               "        this.setModoLista();\n" +
-               "        this.handlePesquisar(this.filtros);\n" +
-               "      },\n" +
-               "      (err) => { this.erroDispacher.dispatch(err); this.loader.setLoading(false); }\n" +
-               "    );\n" +
-               "  }\n\n" +
-               "  handleDeletar(id: number): void {\n" +
-               "    this.loader.setLoading(true);\n" +
-               "    this.httpService.delete(id).pipe(first()).subscribe(\n" +
-               "      () => {\n" +
-               "        this.message.showSuccess('Registro excluido com sucesso.');\n" +
-               "        this.handlePesquisar(this.filtros);\n" +
-               "      },\n" +
-               "      (err) => { this.erroDispacher.dispatch(err); this.loader.setLoading(false); }\n" +
-               "    );\n" +
-               "  }\n\n" +
-               "  setModoNovo(): void {\n" +
-               "    this.selecionadoSubject.next(null);\n" +
-               "    this.alterarEditarSubject.next(true);\n" +
-               "    this.tituloSubject.next('" + pascal + " ' + TipoTitulo.NOVO);\n" +
-               "  }\n\n" +
-               "  setModoEditar(item: " + pascal + "Model): void {\n" +
-               "    this.selecionadoSubject.next(item);\n" +
-               "    this.alterarEditarSubject.next(true);\n" +
-               "    this.tituloSubject.next('" + pascal + " ' + TipoTitulo.EDITAR);\n" +
-               "  }\n\n" +
-               "  setModoLista(): void {\n" +
-               "    this.alterarEditarSubject.next(false);\n" +
-               "    this.tituloSubject.next('" + pascal + "');\n" +
-               "  }\n" +
-               "}\n";
+        String pagesImport = pascal + "Pages";
+        String title = humanizeComponentName(name);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("import { Injectable } from '@angular/core';\n");
+        sb.append("import { BehaviorSubject, Observable } from 'rxjs';\n");
+        sb.append("import { first } from 'rxjs/operators';\n");
+        sb.append("import { ExportGridModel } from '@shared/botoes-exportar/export-grid.model';\n");
+        sb.append("import { Result } from '@shared/data-grid/data-grid-result';\n");
+        sb.append("import { ErroDispacherService } from '@shared/services/erro-dispacher.service';\n");
+        sb.append("import { Http").append(pascal).append("Service } from '@shared/services/http/http-").append(kebab).append(".service';\n");
+        sb.append("import { LoaderService } from '@shared/services/loader.service';\n");
+        sb.append("import { SharedMessageService } from '@shared/services/shared-message.service';\n");
+        sb.append("import { UtilsService } from 'app/common/utils/utils.service';\n");
+        sb.append("import { ConfirmationService } from 'primeng/api';\n");
+        sb.append("import { LazyLoadDto } from 'app/common/model/lazy-load.model';\n");
+        sb.append("import { ").append(pascal).append("Model } from 'app/").append(kebab).append("/models/").append(kebab).append(".model';\n");
+        sb.append("import { Pesquisa").append(pascal).append("Model } from 'app/").append(kebab).append("/models/pesquisa-").append(kebab).append(".model';\n");
+        sb.append("import { ").append(pagesImport).append(" } from 'app/").append(kebab).append("/models/").append(kebab).append(".pages';\n\n");
+
+        sb.append("const tituloPrincipal = '").append(title).append("';\n\n");
+
+        sb.append("@Injectable({ providedIn: 'root' })\n");
+        sb.append("export class ").append(pascal).append("Service {\n\n");
+
+        // BehaviorSubjects
+        sb.append("  private filtros: Pesquisa").append(pascal).append("Model = this.buildFiltrosInicial();\n");
+        sb.append("  private gridSubject = new BehaviorSubject<Result<").append(pascal).append("Model>>(undefined);\n");
+        sb.append("  private selecionadoSubject = new BehaviorSubject<").append(pascal).append("Model>(undefined);\n");
+        sb.append("  private pageSubject = new BehaviorSubject<").append(pagesImport).append(">(").append(pagesImport).append(".Inicio);\n\n");
+
+        // Constructor
+        sb.append("  constructor(\n");
+        sb.append("    private httpService: Http").append(pascal).append("Service,\n");
+        sb.append("    private utilService: UtilsService,\n");
+        sb.append("    private loaderService: LoaderService,\n");
+        sb.append("    private confirmacaoService: ConfirmationService,\n");
+        sb.append("    private sharedMessageService: SharedMessageService,\n");
+        sb.append("    private erroDispacherService: ErroDispacherService\n");
+        sb.append("  ) { }\n\n");
+
+        // handlePesquisar
+        sb.append("  public handlePesquisar(filtros: Pesquisa").append(pascal).append("Model): void {\n");
+        sb.append("    this.filtros = filtros;\n");
+        sb.append("    this.loaderService.setLoading(true);\n");
+        sb.append("    this.httpService.pesquisar(filtros).pipe(first()).subscribe(\n");
+        sb.append("      (res) => { this.loaderService.setLoading(false); this.gridSubject.next(res); },\n");
+        sb.append("      (err) => { this.erroDispacherService.setErro(err); }\n");
+        sb.append("    );\n");
+        sb.append("  }\n\n");
+
+        // handleLoadLazy
+        sb.append("  public handleLoadLazy(lazyDto: LazyLoadDto): void {\n");
+        sb.append("    this.filtros.lazyDto = lazyDto;\n");
+        sb.append("    this.handlePesquisar(this.filtros);\n");
+        sb.append("  }\n\n");
+
+        // handleSalvar
+        sb.append("  public handleSalvar(model: ").append(pascal).append("Model): void {\n");
+        sb.append("    this.loaderService.setLoading(true);\n");
+        sb.append("    this.httpService.salvar(model).pipe(first()).subscribe(\n");
+        sb.append("      () => {\n");
+        sb.append("        this.loaderService.setLoading(false);\n");
+        sb.append("        this.sharedMessageService.showDadosSalvosComSucessoMessage();\n");
+        sb.append("        this.changePage(").append(pagesImport).append(".Inicio);\n");
+        sb.append("        this.handlePesquisar(this.filtros);\n");
+        sb.append("      },\n");
+        sb.append("      (err) => { this.erroDispacherService.setErro(err); }\n");
+        sb.append("    );\n");
+        sb.append("  }\n\n");
+
+        // handleDesativarOuAtivar
+        sb.append("  public handleDesativarOuAtivar(model: ").append(pascal).append("Model): void {\n");
+        sb.append("    this.confirmacaoService.confirm({\n");
+        sb.append("      message: 'Deseja realmente desativar o registro?',\n");
+        sb.append("      header: 'Confirmação',\n");
+        sb.append("      icon: 'fa fa-question-circle',\n");
+        sb.append("      accept: () => { this.desativarOuAtivar(model.id); },\n");
+        sb.append("    });\n");
+        sb.append("  }\n\n");
+
+        sb.append("  private desativarOuAtivar(id: number): void {\n");
+        sb.append("    this.loaderService.setLoading(true);\n");
+        sb.append("    this.httpService.desativarOuAtivar(id).pipe(first()).subscribe(\n");
+        sb.append("      () => {\n");
+        sb.append("        this.loaderService.setLoading(false);\n");
+        sb.append("        this.handlePesquisar(this.filtros);\n");
+        sb.append("        this.sharedMessageService.showRegistroExcluidoMessage();\n");
+        sb.append("      },\n");
+        sb.append("      (err) => { this.erroDispacherService.setErro(err); }\n");
+        sb.append("    );\n");
+        sb.append("  }\n\n");
+
+        // handleExportarGrid
+        sb.append("  public handleExportarGrid(model: ExportGridModel): void {\n");
+        sb.append("    this.loaderService.setLoading(true);\n");
+        sb.append("    this.httpService.exportarGrid(this.filtros).pipe(first()).subscribe(\n");
+        sb.append("      (res) => { this.loaderService.setLoading(false); /* TODO: export logic */ },\n");
+        sb.append("      (err) => { this.erroDispacherService.setErro(err); }\n");
+        sb.append("    );\n");
+        sb.append("  }\n\n");
+
+        // Filtros inicial
+        sb.append("  private buildFiltrosInicial(): Pesquisa").append(pascal).append("Model {\n");
+        sb.append("    return { status: 1, lazyDto: null };\n");
+        sb.append("  }\n\n");
+
+        // Getters / Setters de estado
+        sb.append("  public set").append(pascal).append("Selecionado(row: ").append(pascal).append("Model): void {\n");
+        sb.append("    this.selecionadoSubject.next(row);\n");
+        sb.append("  }\n\n");
+
+        sb.append("  public get").append(pascal).append("Selecionado(): Observable<").append(pascal).append("Model> {\n");
+        sb.append("    return this.selecionadoSubject.asObservable();\n");
+        sb.append("  }\n\n");
+
+        sb.append("  public getGrid(): Observable<Result<").append(pascal).append("Model>> {\n");
+        sb.append("    return this.gridSubject.asObservable();\n");
+        sb.append("  }\n\n");
+
+        sb.append("  public changePage(page: ").append(pagesImport).append("): void {\n");
+        sb.append("    this.pageSubject.next(page);\n");
+        sb.append("  }\n\n");
+
+        sb.append("  public getCurrentPage(): Observable<").append(pagesImport).append("> {\n");
+        sb.append("    return this.pageSubject.asObservable();\n");
+        sb.append("  }\n");
+
+        sb.append("}\n");
+        return sb.toString();
     }
 
     // ── HTTP Service ─────────────────────────────────────────────────────────
 
     private String genHttpService(String name, String kebab) {
         String pascal = toPascalCase(name);
-        return "import { Injectable } from '@angular/core';\n" +
-               "import { HttpClient } from '@angular/common/http';\n" +
-               "import { Observable } from 'rxjs';\n" +
-               "import { URL_API } from '@shared/services/startup.service';\n" +
-               "import { " + pascal + "Model } from 'app/" + kebab + "/models/" + kebab + ".model';\n" +
-               "import { Pesquisa" + pascal + "Model } from 'app/" + kebab + "/models/pesquisa-" + kebab + ".model';\n" +
-               "import { Result } from '@shared/models/result.model';\n\n" +
+        return "import { HttpClient } from '@angular/common/http';\n" +
+               "import { Injectable } from '@angular/core';\n" +
+               "import { Result } from '@shared/data-grid/data-grid-result';\n" +
+               "import { RelatorioModel } from 'app/common/model/relatorio.model';\n" +
+               "import { URL_API } from 'app/startup.service';\n" +
+               "import { Observable } from 'rxjs';\n\n" +
+               "const URL = '" + kebab + "';\n\n" +
                "@Injectable({ providedIn: 'root' })\n" +
                "export class Http" + pascal + "Service {\n\n" +
-               "  constructor(private http: HttpClient) { }\n\n" +
-               "  pesquisar(filtros: Pesquisa" + pascal + "Model): Observable<Result<" + pascal + "Model>> {\n" +
-               "    return this.http.post<Result<" + pascal + "Model>>(`${URL_API}" + kebab + "/pesquisar`, filtros);\n" +
+               "  constructor(private http?: HttpClient) { }\n\n" +
+               "  public pesquisar(filtros: any): Observable<Result<any>> {\n" +
+               "    return this.http.post<Result<any>>(`${URL_API}${URL}/pesquisar`, filtros);\n" +
                "  }\n\n" +
-               "  getById(id: number): Observable<" + pascal + "Model> {\n" +
-               "    return this.http.get<" + pascal + "Model>(`${URL_API}" + kebab + "/getById/${id}`);\n" +
+               "  public exportarGrid(filtros: any): Observable<any[]> {\n" +
+               "    return this.http.post<any[]>(`${URL_API}${URL}/exportar`, filtros);\n" +
                "  }\n\n" +
-               "  save(model: " + pascal + "Model): Observable<void> {\n" +
-               "    return this.http.post<void>(`${URL_API}" + kebab + "/save`, model);\n" +
+               "  public salvar(model: any): Observable<any> {\n" +
+               "    return this.http.post<any>(`${URL_API}${URL}/salvar`, model);\n" +
                "  }\n\n" +
-               "  delete(id: number): Observable<void> {\n" +
-               "    return this.http.delete<void>(`${URL_API}" + kebab + "/delete/${id}`);\n" +
+               "  public desativarOuAtivar(id: number): Observable<any> {\n" +
+               "    return this.http.put<any>(`${URL_API}${URL}/disableOrEnableById/${id}`, null);\n" +
                "  }\n\n" +
-               "  exportar(filtros: Pesquisa" + pascal + "Model): Observable<any> {\n" +
-               "    return this.http.post(`${URL_API}" + kebab + "/exportar`, filtros);\n" +
+               "  public gerarRelatorio(data: any): Observable<RelatorioModel> {\n" +
+               "    return this.http.post<RelatorioModel>(`${URL_API}${URL}/relatorio`, data);\n" +
                "  }\n" +
                "}\n";
     }
 
     // ── Container ────────────────────────────────────────────────────────────
 
+    private String genPages(String name) {
+        String pascal = toPascalCase(name);
+        return "export enum " + pascal + "Pages {\n" +
+               "  Inicio = 'inicio',\n" +
+               "  Novo = 'novo',\n" +
+               "  Editar = 'editar',\n" +
+               "}\n";
+    }
+
     private String genContainer(String name, String kebab) {
         String pascal = toPascalCase(name);
-        return "import { Component, OnInit, OnDestroy, ChangeDetectionStrategy } from '@angular/core';\n" +
-               "import { Observable, Subject } from 'rxjs';\n" +
-               "import { takeUntil, filter } from 'rxjs/operators';\n" +
-               "import { " + pascal + "Service } from '../../services/" + kebab + ".service';\n" +
-               "import { LoaderService } from '@shared/services/loader.service';\n" +
+        String title = humanizeComponentName(name);
+        return "import { Component, ChangeDetectionStrategy, OnDestroy } from '@angular/core';\n" +
+               "import { Title } from '@shared/services/custom-title.service';\n" +
                "import { ErroDispacherService } from '@shared/services/erro-dispacher.service';\n" +
+               "import { LoaderService } from '@shared/services/loader.service';\n" +
                "import { ManipulaErrorService } from '@shared/services/manipula-error.service';\n" +
-               "import { Title } from '@shared/services/custom-title.service';\n\n" +
+               "import { Erro } from 'app/common/model/erro.model';\n" +
+               "import { " + pascal + "Pages } from 'app/" + kebab + "/models/" + kebab + ".pages';\n" +
+               "import { " + pascal + "Service } from 'app/" + kebab + "/services/" + kebab + ".service';\n" +
+               "import { Observable, Subscription } from 'rxjs';\n" +
+               "import { tap, filter } from 'rxjs/operators';\n\n" +
+               "const tituloPrincipal = '" + title + "';\n\n" +
                "@Component({\n" +
                "  selector: 'app-" + kebab + "-container',\n" +
                "  templateUrl: './" + kebab + "-container.component.html',\n" +
                "  changeDetection: ChangeDetectionStrategy.OnPush\n" +
                "})\n" +
-               "export class " + pascal + "ContainerComponent implements OnInit, OnDestroy {\n\n" +
-               "  titulo$: Observable<string>;\n" +
+               "export class " + pascal + "ContainerComponent implements OnDestroy {\n\n" +
+               "  private subscription: Subscription[] = [];\n\n" +
                "  loading$: Observable<boolean>;\n" +
-               "  alterarEditar$: Observable<boolean>;\n\n" +
-               "  private destroy$ = new Subject<void>();\n\n" +
+               "  pages = " + pascal + "Pages;\n" +
+               "  currentPage: " + pascal + "Pages = " + pascal + "Pages.Inicio;\n\n" +
                "  constructor(\n" +
-               "    private service: " + pascal + "Service,\n" +
-               "    private title: Title,\n" +
-               "    private loader: LoaderService,\n" +
-               "    private erroDispacher: ErroDispacherService,\n" +
-               "    private manipulaError: ManipulaErrorService\n" +
-               "  ) { }\n\n" +
-               "  ngOnInit(): void {\n" +
-               "    this.titulo$ = this.service.titulo$;\n" +
-               "    this.loading$ = this.loader.loading$;\n" +
-               "    this.alterarEditar$ = this.service.alterarEditar$;\n\n" +
-               "    this.erroDispacher.erro$.pipe(\n" +
-               "      takeUntil(this.destroy$),\n" +
-               "      filter(err => !!err)\n" +
-               "    ).subscribe(err => {\n" +
-               "      this.loader.setLoading(false);\n" +
-               "      this.manipulaError.handle(err);\n" +
-               "    });\n" +
+               "    private titleService: Title,\n" +
+               "    private loaderService: LoaderService,\n" +
+               "    private manipulaErroService: ManipulaErrorService,\n" +
+               "    private erroDispacherService: ErroDispacherService,\n" +
+               "    private service: " + pascal + "Service\n" +
+               "  ) {\n" +
+               "    this.loading$ = this.loaderService.getLoading();\n" +
+               "    this.initListners();\n" +
                "  }\n\n" +
-               "  ngOnDestroy(): void {\n" +
-               "    this.destroy$.next();\n" +
-               "    this.destroy$.complete();\n" +
+               "  private initListners(): void {\n" +
+               "    let erroSbscription = this.erroDispacherService.getErro().pipe(\n" +
+               "      filter((erro) => erro),\n" +
+               "      tap(() => this.loaderService.setLoading(false)),\n" +
+               "      tap((erro) => {\n" +
+               "        this.manipulaErroService.manipulaErro(erro);\n" +
+               "        this.erroDispacherService.setErro(null);\n" +
+               "      })\n" +
+               "    ).subscribe();\n" +
+               "    this.subscription.push(erroSbscription);\n\n" +
+               "    let currentPageSubscriptions = this.service.getCurrentPage().pipe(\n" +
+               "      tap((page) => (this.currentPage = page)),\n" +
+               "      tap(() => {\n" +
+               "        switch (this.currentPage) {\n" +
+               "          case " + pascal + "Pages.Inicio: this.titleService.setTitle(tituloPrincipal); break;\n" +
+               "          case " + pascal + "Pages.Novo: this.titleService.setTitle(tituloPrincipal + ' - Novo'); break;\n" +
+               "          case " + pascal + "Pages.Editar: this.titleService.setTitle(tituloPrincipal + ' - Editar'); break;\n" +
+               "        }\n" +
+               "      })\n" +
+               "    ).subscribe();\n" +
+               "    this.subscription.push(currentPageSubscriptions);\n" +
+               "  }\n\n" +
+               "  get erro(): Erro {\n" +
+               "    return this.manipulaErroService.erro;\n" +
+               "  }\n\n" +
+               "  public ngOnDestroy(): void {\n" +
+               "    this.subscription.forEach((subscription) => subscription.unsubscribe());\n" +
                "  }\n" +
                "}\n";
     }
 
     private String genContainerHtml(String name, String kebab, DfmForm form) {
-        String title = form.getCaption() != null ? form.getCaption() : toPascalCase(name);
-        return "<app-componente-basico [titulo]=\"titulo$ | async\" [loading]=\"loading$ | async\">\n" +
-               "  <ng-container *ngIf=\"!(alterarEditar$ | async); else cadastro\">\n" +
-               "    <app-" + kebab + "-filtros></app-" + kebab + "-filtros>\n" +
-               "    <app-" + kebab + "-grid></app-" + kebab + "-grid>\n" +
-               "  </ng-container>\n" +
-               "  <ng-template #cadastro>\n" +
-               "    <app-" + kebab + "-cadastro></app-" + kebab + "-cadastro>\n" +
-               "  </ng-template>\n" +
+        String pascal = toPascalCase(name);
+        return "<div [hidden]=\"currentPage !== pages.Inicio\">\n" +
+               "  <app-" + kebab + "-filtros></app-" + kebab + "-filtros>\n" +
+               "</div>\n" +
+               "<div [hidden]=\"currentPage !== pages.Inicio\">\n" +
+               "  <app-" + kebab + "-grid></app-" + kebab + "-grid>\n" +
+               "</div>\n" +
+               "<div *ngIf=\"currentPage === pages.Novo || currentPage === pages.Editar\">\n" +
+               "  <app-" + kebab + "-cadastro></app-" + kebab + "-cadastro>\n" +
+               "</div>\n\n" +
+               "<app-componente-basico\n" +
+               "  [exibirCarregando]=\"loading$ | async\"\n" +
+               "  [erroModel]=\"erro\"\n" +
+               "  [confirmDialog]=\"true\"\n" +
+               "  [msg]=\"[]\">\n" +
                "</app-componente-basico>\n";
     }
 
@@ -327,7 +412,9 @@ public class AngularCodeGenerator {
         int totalChars = gridCols.stream().mapToInt(DfmForm.GridColumn::getWidthChars).sum();
         if (totalChars <= 0) totalChars = gridCols.size() * 10;
 
-        StringBuilder cols = new StringBuilder();
+        StringBuilder initColunas = new StringBuilder();
+        initColunas.append("  private initColunas(): void {\n");
+        initColunas.append("    this.colunas = [\n");
         for (DfmForm.GridColumn gc : gridCols) {
             String field = snakeToCamel(gc.getField());
             String header = gc.getHeader();
@@ -335,51 +422,116 @@ public class AngularCodeGenerator {
                 header = gc.getSubHeader() + " " + header;
             }
             int widthPct = Math.max(5, Math.round((float) gc.getWidthChars() / totalChars * 95));
-            cols.append("    { field: '").append(field).append("', header: '").append(header)
+            initColunas.append("      { field: '").append(field).append("', header: '").append(header)
                 .append("', width: '").append(widthPct).append("%' },\n");
         }
+        initColunas.append("    ];\n");
+        initColunas.append("  }\n\n");
 
-        return "import { Component, OnInit, OnDestroy } from '@angular/core';\n" +
-               "import { Subject } from 'rxjs';\n" +
-               "import { takeUntil } from 'rxjs/operators';\n" +
-               "import { " + pascal + "Service } from '../../services/" + kebab + ".service';\n" +
-               "import { " + pascal + "Model } from '../../models/" + kebab + ".model';\n" +
-               "import { DataGridColunasModel } from '@shared/models/data-grid-colunas.model';\n" +
-               "import { DataGridItem } from '@shared/models/data-grid-item.model';\n\n" +
-               "@Component({\n" +
-               "  selector: 'app-" + kebab + "-grid',\n" +
-               "  templateUrl: './" + kebab + "-grid.component.html'\n" +
-               "})\n" +
-               "export class " + pascal + "GridComponent implements OnInit, OnDestroy {\n\n" +
-               "  colunas: DataGridColunasModel[] = [\n" +
-               cols +
-               "  ];\n\n" +
-               "  listaGrid: DataGridItem[] = [];\n" +
-               "  totalRegistros = 0;\n\n" +
-               "  private destroy$ = new Subject<void>();\n\n" +
-               "  constructor(private service: " + pascal + "Service) { }\n\n" +
-               "  ngOnInit(): void {\n" +
-               "    this.service.grid$.pipe(takeUntil(this.destroy$)).subscribe(result => {\n" +
-               "      if (result) {\n" +
-               "        this.listaGrid = result.listVO.map(item => ({\n" +
-               "          ...item,\n" +
-               "          loadLazy: (event) => this.service.loadLazy(event),\n" +
-               "          editar: () => this.service.setModoEditar(item),\n" +
-               "          excluir: () => this.service.handleDeletar(item.id)\n" +
-               "        }));\n" +
-               "        this.totalRegistros = result.lazyDto?.totalRegistros || 0;\n" +
-               "      }\n" +
-               "    });\n" +
-               "  }\n\n" +
-               "  btnNovo(): void {\n" +
-               "    this.service.setModoNovo();\n" +
-               "  }\n\n" +
-               genColorClassMethod() +
-               "  ngOnDestroy(): void {\n" +
-               "    this.destroy$.next();\n" +
-               "    this.destroy$.complete();\n" +
-               "  }\n" +
-               "}\n";
+        // buildDataGridItem com cells reais
+        StringBuilder buildItem = new StringBuilder();
+        buildItem.append("  private buildDataGridItem(model: ").append(pascal).append("Model): DataGridItem {\n");
+        buildItem.append("    return {\n");
+        buildItem.append("      item: [\n");
+        for (int i = 0; i < gridCols.size(); i++) {
+            DfmForm.GridColumn gc = gridCols.get(i);
+            String field = snakeToCamel(gc.getField());
+            String align = i == 0 ? "center" : "left";
+            buildItem.append("        { field: model.").append(field).append(", tooltip: model.").append(field)
+                     .append(", textAlign: DataGridTextAlignEnum.").append(align).append(" },\n");
+        }
+        buildItem.append("      ],\n");
+        buildItem.append("      loadLazy: (event: LazyLoadEvent) => this.loadLazy(event),\n");
+        buildItem.append("      editar: () => this.btnAlterar(model),\n");
+        buildItem.append("      desativar: () => this.btnDesativar(model),\n");
+        buildItem.append("      historico: () => this.btnHistorico(model.id),\n");
+        buildItem.append("    };\n");
+        buildItem.append("  }\n\n");
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("import { ChangeDetectionStrategy, ChangeDetectorRef, Component, OnDestroy, OnInit } from '@angular/core';\n");
+        sb.append("import { DataGridItem } from '@shared/data-grid/data-grid-item';\n");
+        sb.append("import { Result } from '@shared/data-grid/data-grid-result';\n");
+        sb.append("import { DataGridTextAlignEnum } from '@shared/data-grid/data-grid-text-align.enum';\n");
+        sb.append("import { ").append(pascal).append("Model } from 'app/").append(kebab).append("/models/").append(kebab).append(".model';\n");
+        sb.append("import { ").append(pascal).append("Pages } from 'app/").append(kebab).append("/models/").append(kebab).append(".pages';\n");
+        sb.append("import { ").append(pascal).append("Service } from 'app/").append(kebab).append("/services/").append(kebab).append(".service';\n");
+        sb.append("import { LazyLoadEvent } from 'primeng/api';\n");
+        sb.append("import { Subscription } from 'rxjs';\n");
+        sb.append("import { filter, tap } from 'rxjs/operators';\n\n");
+
+        sb.append("@Component({\n");
+        sb.append("  selector: 'app-").append(kebab).append("-grid',\n");
+        sb.append("  templateUrl: './").append(kebab).append("-grid.component.html',\n");
+        sb.append("  changeDetection: ChangeDetectionStrategy.OnPush\n");
+        sb.append("})\n");
+        sb.append("export class ").append(pascal).append("GridComponent implements OnInit, OnDestroy {\n\n");
+        sb.append("  private subscription: Subscription[] = [];\n\n");
+        sb.append("  listaGrid: any[] = [];\n");
+        sb.append("  totalRegistros: number = 0;\n");
+        sb.append("  colunas: any[];\n\n");
+
+        sb.append("  constructor(\n");
+        sb.append("    private cd: ChangeDetectorRef,\n");
+        sb.append("    private service: ").append(pascal).append("Service\n");
+        sb.append("  ) {\n");
+        sb.append("    this.initColunas();\n");
+        sb.append("  }\n\n");
+
+        sb.append(initColunas);
+
+        sb.append("  public ngOnInit(): void {\n");
+        sb.append("    this.subscription.push(\n");
+        sb.append("      this.service.getGrid().pipe(\n");
+        sb.append("        filter((res) => res !== undefined),\n");
+        sb.append("        tap((res) => this.handlePesquisar(res)),\n");
+        sb.append("        tap(() => this.cd.detectChanges())\n");
+        sb.append("      ).subscribe()\n");
+        sb.append("    );\n");
+        sb.append("  }\n\n");
+
+        sb.append("  private handlePesquisar(resultado: Result<").append(pascal).append("Model>): void {\n");
+        sb.append("    this.listaGrid = [];\n");
+        sb.append("    this.totalRegistros = resultado.lazyDto.totalRegistros;\n");
+        sb.append("    resultado.listVO.forEach((model: ").append(pascal).append("Model) => {\n");
+        sb.append("      this.listaGrid.push(this.buildDataGridItem(model));\n");
+        sb.append("    });\n");
+        sb.append("  }\n\n");
+
+        sb.append(buildItem);
+
+        sb.append("  public loadLazy(event: LazyLoadEvent): void {\n");
+        sb.append("    this.service.handleLoadLazy(this.service['utilService'].getLazyDto(event));\n");
+        sb.append("  }\n\n");
+
+        sb.append("  public exportarGrid(target: string): void {\n");
+        sb.append("    this.service.handleExportarGrid({ target: target, colunas: this.colunas });\n");
+        sb.append("  }\n\n");
+
+        sb.append("  public btnAlterar(model: ").append(pascal).append("Model): void {\n");
+        sb.append("    this.service.set").append(pascal).append("Selecionado(model);\n");
+        sb.append("    this.service.changePage(").append(pascal).append("Pages.Editar);\n");
+        sb.append("  }\n\n");
+
+        sb.append("  public btnDesativar(model: ").append(pascal).append("Model): void {\n");
+        sb.append("    this.service.handleDesativarOuAtivar(model);\n");
+        sb.append("  }\n\n");
+
+        sb.append("  public btnHistorico(id: number): void {\n");
+        sb.append("    // TODO: this.service.handleHistorico(id);\n");
+        sb.append("  }\n\n");
+
+        sb.append("  public btnNovo(): void {\n");
+        sb.append("    this.service.changePage(").append(pascal).append("Pages.Novo);\n");
+        sb.append("  }\n\n");
+
+        sb.append(genColorClassMethod());
+
+        sb.append("  public ngOnDestroy(): void {\n");
+        sb.append("    this.subscription.forEach((s) => s.unsubscribe());\n");
+        sb.append("  }\n");
+        sb.append("}\n");
+        return sb.toString();
     }
 
     private String genGridHtml(String kebab) {
