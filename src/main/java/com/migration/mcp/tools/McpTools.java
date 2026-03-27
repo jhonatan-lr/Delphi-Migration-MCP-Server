@@ -1262,22 +1262,60 @@ class GetUsageGuideTool extends BaseTool {
 ```
 learn_repository(repository_path: "C:\\caminho\\do\\projeto-delphi")
 ```
-Isso varre todos os .pas e .dfm e aprende: prefixos, BD, módulos, SQL, componentes.
+Varre todos os .pas e .dfm e aprende: prefixos, BD, módulos, SQL, componentes.
 O perfil é persistido em disco — sobrevive a reinícios.
 
-### 2. Migrar uma tela completa (Java + Angular)
+### 2. Aprender o banco de dados (uma vez)
+```
+learn_database(
+  jdbc_url: "jdbc:informix-sqli://192.168.0.231:9088/bd_desenv_m:INFORMIXSERVER=ol_saturno",
+  username: "informix",
+  password: "informix",
+  tables_filter: ["est", "cad", "bdo", "mov", "log", "rec", "pag", "fis", "fin", "ctb", "vnd", "cmp"]
+)
+```
+Extrai metadados reais do Informix: 1549 tabelas com **colunas** (nome, tipo, javaType, nullable),
+PKs, FKs e master-detail. Salva em `~/.delphi-mcp/entity-patterns.json`. Roda em ~9 segundos.
+**Só precisa rodar de novo se o schema do banco mudar.**
+
+Os metadados do banco são usados para:
+- **Fallback de campos**: Quando .pas/.dfm não têm campos, usa colunas reais do banco
+- **Filtro de campos fantasma**: Remove campos do DFM que não existem na tabela real
+- **Tipos corretos**: Corrige tipos "chutados" com o tipo real (CHAR→String, INTEGER→Integer)
+- **FKs do banco**: Descobre @ManyToOne automaticamente via constraints do banco
+- **nullable**: Gera `@Column(nullable = false)` com dados reais
+
+### 3. Migrar uma tela completa (Java + Angular)
 ```
 generate_full_module(
-  pas_file_path: "C:\\projeto\\f_MinhaTelaDelphipas",
+  pas_file_path: "C:\\projeto\\f_MinhaTela.pas",
   package_name: "logus.corporativo.api.meumodulo",
   output_dir: "C:\\output"    // opcional: salva em disco
 )
 ```
 Gera **24 arquivos** de uma vez:
-- 7 Java: Entity, Repository, Service, Resource, DTO, PesquisaDTO, GridVo
+- 7 Java: Entity, Repository (com JPQL), Service, Resource, DTO, PesquisaDTO, GridVo
 - 17 Angular: Module, Routing, Container, Grid, Filtros, Cadastro, Services, Models
 
-### 3. Analisar antes de migrar (opcional)
+### 4. Gerar só partes específicas
+```
+generate_java_class(
+  file_path: "C:\\projeto\\f_MinhaTela.pas",
+  dfm_file_path: "C:\\projeto\\f_MinhaTela.dfm",
+  package_name: "logus.corporativo.api.meumodulo",
+  generate: ["entity", "repository", "vo", "dto"]
+)
+```
+**IMPORTANTE:** Para gerar Repository + GridVo + PesquisaDto consistentes, incluir
+`"entity"` no array `generate`. O Repository precisa dos campos da Entity para construir
+o `SELECT NEW Vo(...)` JPQL. Se gerar apenas `["repository"]` sem `"entity"`, os campos
+ficam vazios.
+
+Os nomes dos arquivos gerados são **derivados da tabela do banco** (via `knownTables`),
+não do nome do form Delphi. Ex: `f_ManutencaoPedidoAutomatico.pas` → tabela `estmpedautomatico`
+→ `PedautomaticoEntity`, `PedautomaticoRepository`, `GridPedautomaticoVo`.
+
+### 5. Analisar antes de migrar (opcional)
 ```
 analyze_delphi_unit(file_path: "C:\\projeto\\f_Tela.pas")
 analyze_dfm_form(file_path: "C:\\projeto\\f_Tela.dfm")
@@ -1286,7 +1324,7 @@ extract_business_rules(file_path: "C:\\projeto\\f_Tela.pas")
 detect_inconsistencies(file_path: "C:\\projeto\\f_Tela.pas")
 ```
 
-### 4. Gerar plano de migração
+### 6. Gerar plano de migração
 ```
 generate_migration_plan(
   project_name: "Meu Módulo",
@@ -1299,12 +1337,13 @@ generate_migration_plan(
 """;
 
     private static final String TOOLS_REFERENCE = """
-## Referência de Tools (15 tools)
+## Referência de Tools (16 tools)
 
 ### Aprendizado e Configuração
 | Tool | Quando usar |
 |------|-------------|
 | `learn_repository` | **Uma vez** no início. Passe o caminho raiz do projeto Delphi. |
+| `learn_database` | **Uma vez**. Extrai tabelas, colunas, PKs, FKs do Informix. Persistido em disco (~9 seg). |
 | `get_learned_profile` | Para ver o que foi aprendido (BD, prefixos, módulos). |
 | `clear_learned_profile` | Para trocar de projeto. |
 | `load_target_patterns` | Recarrega entity-patterns.json (após editar sem reiniciar MCP). |
@@ -1336,18 +1375,21 @@ generate_migration_plan(
 ## Entity Patterns (entity-patterns.json)
 
 ### O que é
-Arquivo JSON externo em `~/.delphi-mcp/entity-patterns.json` com regras extraídas das
-663 entities reais do `logus-corporativo-api`. O MCP lê automaticamente ao iniciar.
+Arquivo JSON em `~/.delphi-mcp/entity-patterns.json` com metadados do banco Informix
+(via `learn_database`) + regras curadas do projeto. Carregado automaticamente ao iniciar.
 
 ### O que contém
 | Seção | Entradas | Função |
 |-------|----------|--------|
 | `columnNameExpansions` | 91 | "cancel" → "cancelamento", "prev" → "previsao" |
-| `knownForeignKeys` | 146 | "cdg_filial" → "FilialEntity" (@ManyToOne) |
+| `knownForeignKeys` | 796 | "cdg_filial" → "FilialEntity" (@ManyToOne) |
 | `stringForeignKeys` | 5 | "cdg_fornecedor" (CNPJ, não é FK de entity) |
 | `knownEnums` | 65 | "flg_status_pedido" → SituacaoPedidoAutomaticoEnum + Converter |
-| `knownTables` | 651 | "estmpedautomatico" → {entity, pk} |
-| `masterDetailRelationships` | 50 | "estdpedautomatico" → master: estmpedautomatico |
+| `knownTables` | 1549 | "estmpedautomatico" → {entity, pk, **columns**[]} |
+| `masterDetailRelationships` | 15 | "estdpedautomatico" → master: estmpedautomatico |
+
+Cada tabela em `knownTables` agora inclui **columns** com nome, tipo Informix, tipo Java,
+nullable e length — dados reais do banco usados como fallback quando o .pas/.dfm não tem campos.
 
 ### Como funciona
 - **Carregamento automático**: O MCP lê o JSON ao iniciar (`/mcp` para reiniciar).
@@ -1384,6 +1426,9 @@ Arquivo JSON externo em `~/.delphi-mcp/entity-patterns.json` com regras extraíd
 - **Endpoints:** POST /pesquisar, POST /save, GET /getById/{id}, DELETE /delete/{id}
 - **Error handling:** ValidationException → 409, Exception → 500
 - **Entity:** javax.persistence (não jakarta), Integer como tipo de ID
+- **Repository:** `JpaRepository` (sem JpaSpecificationExecutor), sem @Transactional, JPQL com `SELECT NEW Vo(...)`, `String FROM` constante, `Page<GridVo> pesquisar(Pageable)`, `List<GridVo> exportar()`, filtros `(:param IS NULL OR ...)`
+- **GridVo:** `@LazyLoadField`, constructor all-args (para SELECT NEW), datas como String (formatarData), FKs como Integer
+- **PesquisaDto:** `LazyLoadDto lazyDto`, FKs→Integer, datas→String, enums→Integer
 
 ### Frontend — logus-corporativo-web
 - **Angular 10** / PrimeNG 11 (NÃO Angular Material)
@@ -1445,14 +1490,20 @@ analyze_delphi_unit(file_path: "C:\\des-jhs\\projeto\\f_MonitorPedido.pas")
 ```
 O campo `calledForms` mostra quais forms são chamados (MakeShowModal, Create, ShowModal).
 
-### Gerar só o Java (sem Angular)
+### Gerar Entity + Repository + GridVo + PesquisaDto consistentes
 ```
 generate_java_class(
   file_path: "C:\\des-jhs\\projeto\\f_Cliente.pas",
+  dfm_file_path: "C:\\des-jhs\\projeto\\f_Cliente.dfm",
   package_name: "logus.corporativo.api.clientes",
-  generate: ["entity", "repository", "service"]
+  generate: ["entity", "repository", "vo", "dto"]
 )
 ```
+**Nota:** Incluir `"entity"` é importante — Repository usa os campos da Entity para
+construir `SELECT NEW Vo(...)`, e o nome do arquivo (ex: `ClienteRepository.java`)
+é derivado da tabela do banco via `knownTables`.
+
+Inclua `dfm_file_path` para melhor extração de campos. Sem ele, usa apenas o .pas.
 
 ### Gerar só o Angular (sem Java)
 ```
@@ -1461,6 +1512,18 @@ generate_angular_component(
   pas_file_path: "C:\\des-jhs\\projeto\\f_Cliente.pas"
 )
 ```
+
+### Aprender o banco (uma vez, persistido em disco)
+```
+learn_database(
+  jdbc_url: "jdbc:informix-sqli://192.168.0.231:9088/bd_desenv_m:INFORMIXSERVER=ol_saturno",
+  username: "informix",
+  password: "informix",
+  tables_filter: ["est", "cad", "bdo", "mov", "log", "rec", "pag", "fis", "fin", "ctb", "vnd", "cmp"]
+)
+```
+Extrai 1549 tabelas com colunas reais em ~9 segundos. O resultado fica em
+`~/.delphi-mcp/entity-patterns.json` e é carregado automaticamente ao reiniciar o MCP.
 
 ## Limitações Conhecidas (revisão manual necessária)
 
