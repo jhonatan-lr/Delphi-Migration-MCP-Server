@@ -360,50 +360,41 @@ class GenerateJavaClassTool extends BaseTool {
                     if (cleanBase.isEmpty()) cleanBase = baseName;
 
                     if (generate.contains("entity")) {
-                        // Agrupa campos por dataset para gerar entities separadas (master-detail)
-                        Map<String, List<DfmForm.DatasetField>> byDataset = new LinkedHashMap<>();
-                        if (finalDfmFields != null) {
-                            for (DfmForm.DatasetField df : finalDfmFields) {
-                                String ds = df.getDatasetName() != null ? df.getDatasetName() : "default";
-                                byDataset.computeIfAbsent(ds, k -> new ArrayList<>()).add(df);
-                            }
-                        }
+                        // ══ Nova abordagem: entity vem da SQL, não do dataset ══
+                        // 1. Extrair tabelas únicas do FROM das SQLs
+                        // 2. Filtrar tabelas de infraestrutura (cad*, que já existem)
+                        // 3. Gerar 1 entity por tabela real
 
-                        // Fix 4: filtrar datasets de filtro (combos, não tabelas reais)
-                        byDataset.entrySet().removeIf(e -> {
-                            String dsLower = e.getKey().toLowerCase();
-                            return dsLower.contains("filtro") || dsLower.contains("combo") ||
-                                   dsLower.contains("lookup") || e.getValue().size() <= 2;
-                        });
+                        TargetPatterns tp = ProjectProfileStore.getInstance().getPatterns();
+                        Map<String, String> entityTables = resolveEntityTables(unit.getSqlQueries(), tp);
 
-                        if (byDataset.size() <= 1) {
-                            // 1 dataset ou sem DFM → 1 entity
+                        if (entityTables.isEmpty()) {
+                            // Fallback: 1 entity genérica
                             String mainTable = extractMainTable(unit.getSqlQueries(), 0);
                             generatedFiles.put(cleanBase + "Entity.java",
                                     generator.generateEntity(dc, packageName, finalDfmFields, mainTable));
                         } else {
-                            // Múltiplos datasets → 1 entity por dataset
-                            // Coleta todas as tabelas das SQLs
-                            List<String> sqlTables = new ArrayList<>();
-                            for (SqlQuery sq : unit.getSqlQueries()) {
-                                if ("SELECT".equals(sq.getQueryType()) && sq.getTablesUsed() != null && !sq.getTablesUsed().isEmpty()) {
-                                    sqlTables.add(sq.getTablesUsed().get(0).toLowerCase());
+                            // Agrupa dfmFields por dataset para associar campos a cada entity
+                            Map<String, List<DfmForm.DatasetField>> byDataset = new LinkedHashMap<>();
+                            if (finalDfmFields != null) {
+                                for (DfmForm.DatasetField df : finalDfmFields) {
+                                    String ds = df.getDatasetName() != null ? df.getDatasetName() : "default";
+                                    byDataset.computeIfAbsent(ds, k -> new ArrayList<>()).add(df);
                                 }
                             }
 
-                            int dsIdx = 0;
-                            for (Map.Entry<String, List<DfmForm.DatasetField>> entry : byDataset.entrySet()) {
-                                String dsName = entry.getKey();
-                                List<DfmForm.DatasetField> dsFields = entry.getValue();
-                                String entityName = inferEntityName(dsName, cleanBase);
+                            for (Map.Entry<String, String> tableEntry : entityTables.entrySet()) {
+                                String tableName = tableEntry.getKey();
+                                String entityName = tableEntry.getValue().replace("Entity", "");
 
-                                // Associar dataset à tabela: primeiro tenta knownTables pelo entityName,
-                                // senão usa a SQL na posição correspondente
-                                String table = findTableForEntity(entityName, sqlTables, dsIdx);
-                                dsIdx++;
+                                // Encontrar campos: tenta match dataset→tabela, senão usa todos os dfmFields
+                                List<DfmForm.DatasetField> entityFields = findFieldsForTable(tableName, byDataset, tp);
+                                if (entityFields == null || entityFields.isEmpty()) {
+                                    entityFields = finalDfmFields; // fallback
+                                }
 
                                 generatedFiles.put(entityName + "Entity.java",
-                                        generator.generateEntity(dc, packageName, dsFields, table, entityName));
+                                        generator.generateEntity(dc, packageName, entityFields, tableName, entityName));
                             }
                         }
                     }
@@ -439,6 +430,98 @@ class GenerateJavaClassTool extends BaseTool {
                 if (count == index) return sq.getTablesUsed().get(0).toLowerCase();
                 count++;
             }
+        }
+        return null;
+    }
+
+    /** Tabelas de infraestrutura que já existem como entities no projeto — não gerar */
+    private static final Set<String> INFRA_TABLE_PREFIXES = Set.of(
+            "cadfil", "cadprod", "cadassoc", "cadforn", "cadcli", "caduser",
+            "cadsecao", "cadgrupo", "cadsubgr", "caddepto", "cadmunicipio",
+            "cadbanco", "cadncm", "caduf", "cadcfop", "cadcompr", "cadopescfop",
+            "cadoprec", "cadoppag", "cadfrec", "cadfpag", "cadclpag", "cadccust",
+            "bdomnfe", "bdomnfs", "estmven", "estmped", "cadncfop", "cadparam"
+    );
+
+    /**
+     * Resolve quais entities gerar a partir das SQLs.
+     * Retorna Map<tableName, entityClassName> com tabelas reais (não infra).
+     */
+    private Map<String, String> resolveEntityTables(List<SqlQuery> queries, TargetPatterns tp) {
+        Map<String, String> result = new LinkedHashMap<>();
+        Set<String> seen = new HashSet<>();
+
+        for (SqlQuery sq : queries) {
+            if (sq.getTablesUsed() == null || sq.getTablesUsed().isEmpty()) continue;
+            String mainTable = sq.getTablesUsed().get(0).toLowerCase();
+
+            // Filtrar: temporárias, subqueries, já vistas
+            if (mainTable.startsWith("tmp") || mainTable.equals("temp") || !seen.add(mainTable)) continue;
+
+            // Filtrar: tabelas de infraestrutura (cadastros base)
+            if (INFRA_TABLE_PREFIXES.contains(mainTable)) continue;
+            // Heurística extra: tabelas cad* que não são a tela principal
+            if (mainTable.startsWith("cad") && !mainTable.contains("prop") && !mainTable.contains("solic")) continue;
+
+            // Resolver nome da entity
+            String entityName;
+            if (tp != null && tp.getKnownTables().containsKey(mainTable)) {
+                entityName = tp.getKnownTables().get(mainTable).getEntity();
+            } else {
+                entityName = inferEntityFromTable(mainTable);
+            }
+
+            if (entityName != null) {
+                result.put(mainTable, entityName);
+            }
+        }
+        return result;
+    }
+
+    /** Infere nome de entity a partir do nome da tabela: estmpropcc → PropostaCCEntity */
+    private String inferEntityFromTable(String tableName) {
+        String clean = tableName;
+        boolean isDetail = false;
+        if (clean.matches("^estd.*")) { isDetail = true; clean = clean.substring(4); }
+        else if (clean.matches("^estm.*")) { clean = clean.substring(4); }
+        else if (clean.matches("^(cad|bdo|mov|log|fis|fin|rec|pag|ctb|vnd|cmp).*")) {
+            clean = clean.substring(3);
+        }
+        // snake to PascalCase
+        String pascal = "";
+        for (String part : clean.split("_")) {
+            if (!part.isEmpty()) pascal += part.substring(0, 1).toUpperCase() + part.substring(1);
+        }
+        if (pascal.isEmpty()) pascal = tableName;
+        return (isDetail ? "Item" : "") + pascal + "Entity";
+    }
+
+    /** Encontra campos DFM para uma tabela específica */
+    private List<DfmForm.DatasetField> findFieldsForTable(String tableName,
+            Map<String, List<DfmForm.DatasetField>> byDataset, TargetPatterns tp) {
+        // Se só tem 1 dataset, retorna ele
+        if (byDataset.size() == 1) return byDataset.values().iterator().next();
+
+        // Tenta match: tabela detail → dataset com "Produto"/"Item"/"Detalhe"
+        boolean isDetail = tableName.matches("^estd.*") ||
+                (tp != null && tp.getMasterDetailRelationships().containsKey(tableName));
+
+        for (Map.Entry<String, List<DfmForm.DatasetField>> e : byDataset.entrySet()) {
+            String dsLower = e.getKey().toLowerCase();
+            boolean dsIsDetail = dsLower.contains("produto") || dsLower.contains("item") ||
+                                 dsLower.contains("detalhe") || dsLower.contains("solic");
+            // Filtrar datasets de combo/filtro
+            if (dsLower.contains("filtro") || dsLower.contains("combo") ||
+                dsLower.contains("lookup") || dsLower.contains("display") ||
+                dsLower.contains("selecao") || e.getValue().size() <= 2) {
+                continue;
+            }
+            if (isDetail == dsIsDetail) return e.getValue();
+        }
+
+        // Fallback: primeiro dataset não-filtro
+        for (Map.Entry<String, List<DfmForm.DatasetField>> e : byDataset.entrySet()) {
+            if (e.getValue().size() > 2) return e.getValue();
         }
         return null;
     }
