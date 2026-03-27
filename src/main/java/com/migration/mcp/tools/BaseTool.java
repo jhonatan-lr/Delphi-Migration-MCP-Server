@@ -111,7 +111,12 @@ public abstract class BaseTool {
               .append("\"type\":\"").append(fieldDefs[i + 1]).append("\",")
               .append("\"description\":\"").append(fieldDefs[i + 2]).append("\"}");
         }
-        sb.append("},\"required\":[\"").append(fieldDefs[0]).append("\"]}");
+        // content/file_path são mutuamente opcionais — não marcar nenhum como required
+        if ("content".equals(fieldDefs[0])) {
+            sb.append("},\"required\":[]}");
+        } else {
+            sb.append("},\"required\":[\"").append(fieldDefs[0]).append("\"]}");
+        }
         return sb.toString();
     }
 }

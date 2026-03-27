@@ -38,7 +38,7 @@ class AnalyzeDelphiUnitTool extends BaseTool {
                     "unit_name": {"type": "string", "description": "Nome da unit (opcional, extraído automaticamente)"},
                     "include_body": {"type": "boolean", "description": "Incluir corpo dos métodos no resultado (padrão: false)"}
                   },
-                  "required": ["content"]
+                  "required": []
                 }
                 """
         );
@@ -63,10 +63,14 @@ class AnalyzeDelphiUnitTool extends BaseTool {
     private String getContent(Map<String, Object> args) throws IOException {
         if (args.containsKey("content")) {
             String content = requireString(args, "content");
-            if (content != null && !content.isBlank()) return content;
+            // Conteúdo válido precisa ter pelo menos 10 chars (menor unit possível)
+            if (content != null && !content.isBlank() && content.trim().length() >= 10) return content;
         }
-        String path = requireString(args, "file_path");
-        return readFileWithFallback(Path.of(path));
+        if (args.containsKey("file_path")) {
+            String path = requireString(args, "file_path");
+            return readFileWithFallback(Path.of(path));
+        }
+        throw new IOException("Informe 'file_path' ou 'content' com o conteúdo do arquivo.");
     }
 
     /** Lê arquivo tentando UTF-8 primeiro, depois ISO-8859-1 (arquivos Delphi legados) */
@@ -102,7 +106,7 @@ class AnalyzeDfmFormTool extends BaseTool {
                 )
         );
         return new McpServerFeatures.SyncToolSpecification(tool, (exchange, args) -> withLogging("analyze_dfm_form", args, () -> {
-                String content = args.containsKey("content") && !requireString(args, "content").isBlank()
+                String content = args.containsKey("content") && !requireString(args, "content").isBlank() && requireString(args, "content").trim().length() >= 10
                         ? requireString(args, "content")
                         : AnalyzeDelphiUnitTool.readFileWithFallback(Path.of(requireString(args, "file_path")));
                 DfmForm form = parser.parse(content);
@@ -131,7 +135,7 @@ class ExtractSqlQueresTool extends BaseTool {
                 )
         );
         return new McpServerFeatures.SyncToolSpecification(tool, (exchange, args) -> withLogging("extract_sql_queries", args, () -> {
-                String content = args.containsKey("content") && !requireString(args, "content").isBlank()
+                String content = args.containsKey("content") && !requireString(args, "content").isBlank() && requireString(args, "content").trim().length() >= 10
                         ? requireString(args, "content")
                         : AnalyzeDelphiUnitTool.readFileWithFallback(Path.of(requireString(args, "file_path")));
                 List<SqlQuery> queries = parser.extractSqlQueries(content);
@@ -155,22 +159,33 @@ class ExtractBusinessRules extends BaseTool {
         McpSchema.Tool tool = new McpSchema.Tool(
                 "extract_business_rules",
                 "Extrai regras de negócio do código Delphi: validações (if/then com ShowMessage ou raise), " +
-                "cálculos complexos, verificações de consistência. Para cada regra, fornece estratégia de " +
-                "migração e código Java sugerido.",
+                "cálculos complexos, verificações de consistência. Também detecta lógica de inicialização " +
+                "de tela (FormShow/FormCreate): valores default, pré-seleções de combos, auto-loads e " +
+                "estados iniciais de componentes. Para cada regra, fornece estratégia de migração e código Java sugerido.",
                 buildInputSchema(
                         "content", "string", "Conteúdo do código Delphi (.pas)",
                         "file_path", "string", "Caminho para o arquivo .pas"
                 )
         );
         return new McpServerFeatures.SyncToolSpecification(tool, (exchange, args) -> withLogging("extract_business_rules", args, () -> {
-                String content = args.containsKey("content") && !requireString(args, "content").isBlank()
+                String content = args.containsKey("content") && !requireString(args, "content").isBlank() && requireString(args, "content").trim().length() >= 10
                         ? requireString(args, "content")
                         : AnalyzeDelphiUnitTool.readFileWithFallback(Path.of(requireString(args, "file_path")));
                 List<BusinessRule> rules = parser.extractBusinessRules(content);
+                List<FormInitialization> formInits = parser.extractFormInitialization(content);
+
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("totalFound", rules.size());
                 result.put("byType", rules.stream().collect(Collectors.groupingBy(BusinessRule::getRuleType, Collectors.counting())));
                 result.put("rules", rules);
+
+                // Form initialization (FormShow/FormCreate/FormActivate)
+                if (!formInits.isEmpty()) {
+                    int totalInit = formInits.stream().mapToInt(FormInitialization::totalDetected).sum();
+                    result.put("formInitializationTotal", totalInit);
+                    result.put("formInitialization", formInits);
+                }
+
                 return success(result);
         }));
     }
@@ -295,7 +310,7 @@ class GenerateJavaClassTool extends BaseTool {
                 """
         );
         return new McpServerFeatures.SyncToolSpecification(tool, (exchange, args) -> withLogging("generate_java_class", args, () -> {
-                String content = args.containsKey("content") && !requireString(args, "content").isBlank()
+                String content = args.containsKey("content") && !requireString(args, "content").isBlank() && requireString(args, "content").trim().length() >= 10
                         ? requireString(args, "content")
                         : AnalyzeDelphiUnitTool.readFileWithFallback(Path.of(requireString(args, "file_path")));
 
@@ -737,7 +752,7 @@ class GenerateAngularComponent extends BaseTool {
         );
         return new McpServerFeatures.SyncToolSpecification(tool, (exchange, args) -> withLogging("generate_angular_component", args, () -> {
                 // Parse DFM
-                String dfmContent = args.containsKey("content") && !requireString(args, "content").isBlank()
+                String dfmContent = args.containsKey("content") && !requireString(args, "content").isBlank() && requireString(args, "content").trim().length() >= 10
                         ? requireString(args, "content")
                         : AnalyzeDelphiUnitTool.readFileWithFallback(Path.of(requireString(args, "file_path")));
                 DfmForm form = dfmParser.parse(dfmContent);
@@ -746,7 +761,7 @@ class GenerateAngularComponent extends BaseTool {
                 // Parse PAS (opcional, para campos)
                 DelphiClass dc = null;
                 if (args.containsKey("pas_content") || args.containsKey("pas_file_path")) {
-                    String pasContent = args.containsKey("pas_content") && !requireString(args, "pas_content").isBlank()
+                    String pasContent = args.containsKey("pas_content") && !requireString(args, "pas_content").isBlank() && requireString(args, "pas_content").trim().length() >= 10
                             ? requireString(args, "pas_content")
                             : AnalyzeDelphiUnitTool.readFileWithFallback(Path.of(requireString(args, "pas_file_path")));
                     DelphiUnit unit = sourceParser.parse(pasContent, "input.pas");
@@ -1371,6 +1386,12 @@ generate_migration_plan(
 - Todas as tools aceitam `file_path` — passe o caminho absoluto do arquivo.
 - O campo `content` é opcional (use apenas se quiser enviar o conteúdo diretamente).
 - `analyze_delphi_unit` tem `include_body: false` (padrão) para output compacto.
+- **Sempre passe o arquivo .pas COMPLETO** (via `file_path` de preferência). O parser \
+depende da estrutura hierárquica da unit Delphi (unit → interface → type → implementation) \
+para identificar contexto de classes, métodos e componentes. Fragmentos isolados de código \
+(ex: só o corpo de um FormShow sem a declaração da unit/class) serão ignorados ou terão \
+resultados incompletos. O `content` é opcional — se omitido ou menor que 10 caracteres, \
+o MCP lê automaticamente do `file_path`.
 
 ## Entity Patterns (entity-patterns.json)
 

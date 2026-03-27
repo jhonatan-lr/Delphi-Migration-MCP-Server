@@ -818,6 +818,366 @@ public class DelphiSourceParser {
         return new ArrayList<>(forms);
     }
 
+    // ── Form Initialization (FormShow / FormCreate / FormActivate) ─────────
+
+    /**
+     * Extrai lógica de inicialização de tela de métodos FormShow, FormCreate,
+     * FormActivate e Create (constructor). Detecta:
+     * - DEFAULT_VALUE: atribuições a campos visuais (.Date, .Text, .KeyValue, etc.)
+     * - CONDITIONAL_DEFAULT: atribuições dentro de if/then
+     * - COMBO_PRESELECTION: seleção programática de itens (.Selected := True, .KeyValue)
+     * - AUTO_LOAD: chamadas a métodos de carga (Carregar*, Pesquisar*, Listar*, Load*)
+     * - INITIAL_STATE: DisableComponent / EnableComponent / .Enabled := / .Visible :=
+     */
+    public List<FormInitialization> extractFormInitialization(String src) {
+        List<FormInitialization> results = new ArrayList<>();
+
+        // Encontra o corpo de cada método de inicialização
+        // Padrão: procedure TClassName.FormShow(Sender: TObject);  ...body...
+        String[] initMethods = {"FormShow", "FormCreate", "FormActivate", "Create"};
+
+        for (String methodName : initMethods) {
+            Pattern methodPattern = Pattern.compile(
+                    "(?i)procedure\\s+\\w+\\." + methodName + "\\s*\\([^)]*\\)\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                    Pattern.MULTILINE);
+            Matcher mm = methodPattern.matcher(src);
+            if (mm.find()) {
+                String body = mm.group(0);
+                if (body.length() > 10000) body = body.substring(0, 10000);
+
+                FormInitialization init = parseInitBody(body, methodName);
+                if (init.totalDetected() > 0) {
+                    results.add(init);
+                }
+            }
+        }
+
+        return results;
+    }
+
+    private FormInitialization parseInitBody(String body, String context) {
+        FormInitialization init = new FormInitialization();
+        init.setContext(context);
+
+        // ── 1. Detecta atribuições condicionais (if ... then ... campo.Prop := valor) ──
+        // Precisa rodar ANTES dos default values simples para marcar ranges já consumidos
+        List<int[]> conditionalRanges = new ArrayList<>();
+        extractConditionalDefaults(body, context, init, conditionalRanges);
+
+        // ── 2. Default values simples (fora de blocos condicionais) ──
+        extractDefaultValues(body, context, init, conditionalRanges);
+
+        // ── 3. Combo pre-selection (Items.Items[i].Selected := True, loops com Selected) ──
+        extractComboPreselections(body, context, init);
+
+        // ── 4. Auto-load (chamadas a Carregar*, Pesquisar*, Listar*, Load*, Buscar*) ──
+        extractAutoLoads(body, context, init);
+
+        // ── 5. Initial state (DisableComponent, EnableComponent, .Enabled :=, .Visible :=) ──
+        extractInitialStates(body, context, init, conditionalRanges);
+
+        return init;
+    }
+
+    // ── 1. Default Values ──────────────────────────────────────────────────
+
+    private static final Pattern DEFAULT_VALUE_PATTERN = Pattern.compile(
+            "(?i)(\\w+)\\.(Date|Text|KeyValue|Value|Checked|ItemIndex|Caption|EditValue|DisplayValue)\\s*:=\\s*([^;]+);");
+
+    private void extractDefaultValues(String body, String context, FormInitialization init, List<int[]> conditionalRanges) {
+        Matcher m = DEFAULT_VALUE_PATTERN.matcher(body);
+        while (m.find()) {
+            // Pula se está dentro de um range condicional já processado
+            if (isInRange(m.start(), conditionalRanges)) continue;
+
+            String component = m.group(1);
+            String property = m.group(2);
+            String value = m.group(3).trim();
+
+            // Ignora variáveis locais e self
+            if (component.equalsIgnoreCase("Self") || component.equalsIgnoreCase("Result")) continue;
+
+            FormInitialization.DefaultValue dv = new FormInitialization.DefaultValue();
+            dv.setComponent(component);
+            dv.setProperty(property);
+            dv.setValue(value);
+            dv.setContext(context);
+            dv.setDescription(describeDefaultValue(component, property, value));
+            dv.setMigration(suggestDefaultMigration(property, value));
+            init.getDefaultValues().add(dv);
+        }
+    }
+
+    private String describeDefaultValue(String component, String property, String value) {
+        String valueLower = value.toLowerCase();
+        if (valueLower.contains("conexao.date") || valueLower.contains("date") || valueLower.contains("now"))
+            return component + " inicializado com data atual do servidor";
+        if (valueLower.contains("''") || valueLower.equals("''" ))
+            return component + " inicializado como vazio";
+        if (valueLower.equals("0") || valueLower.equals("false") || valueLower.equals("true"))
+            return component + "." + property + " inicializado com " + value;
+        return component + "." + property + " inicializado com " + value;
+    }
+
+    private String suggestDefaultMigration(String property, String value) {
+        String propLower = property.toLowerCase();
+        String valLower = value.toLowerCase();
+        if (propLower.equals("date")) {
+            if (valLower.contains("conexao.date") || valLower.contains("now") || valLower.contains("date"))
+                return "Inicializar campo no buildFormGroup() com new Date()";
+            return "Inicializar campo com valor de data no buildFormGroup()";
+        }
+        if (propLower.equals("keyvalue"))
+            return "Pré-selecionar dropdown/autocomplete no buildFormGroup() ou ngOnInit";
+        if (propLower.equals("checked"))
+            return "Inicializar checkbox no buildFormGroup() com " + value;
+        if (propLower.equals("itemindex"))
+            return "Inicializar dropdown selectedIndex no buildFormGroup()";
+        if (propLower.equals("text") || propLower.equals("caption"))
+            return "Inicializar campo texto no buildFormGroup() com '" + value + "'";
+        return "Inicializar campo no buildFormGroup() com valor: " + value;
+    }
+
+    // ── 2. Conditional Defaults ────────────────────────────────────────────
+
+    // Padrão: if (condição) then begin ... campo.Prop := valor; ... end;
+    private static final Pattern IF_BLOCK_PATTERN = Pattern.compile(
+            "(?i)if\\s+(.{5,300}?)\\s+then\\s*(?:begin)?([\\s\\S]*?)(?:end\\s*;|(?=\\belse\\b))",
+            Pattern.DOTALL);
+
+    private void extractConditionalDefaults(String body, String context, FormInitialization init, List<int[]> conditionalRanges) {
+        Matcher ifM = IF_BLOCK_PATTERN.matcher(body);
+        while (ifM.find()) {
+            String condition = ifM.group(1).trim().replaceAll("\\s+", " ");
+            String block = ifM.group(2);
+            int blockStart = ifM.start();
+            int blockEnd = ifM.end();
+
+            // Procura atribuições a campos visuais dentro do bloco condicional
+            Matcher assignM = DEFAULT_VALUE_PATTERN.matcher(block);
+            boolean foundAssignment = false;
+
+            while (assignM.find()) {
+                String component = assignM.group(1);
+                String property = assignM.group(2);
+                String value = assignM.group(3).trim();
+
+                if (component.equalsIgnoreCase("Self") || component.equalsIgnoreCase("Result")) continue;
+
+                // Verifica se há DisableComponent no mesmo bloco
+                boolean disabled = block.toLowerCase().contains("disablecomponent(" + component.toLowerCase() + ")") ||
+                                   block.toLowerCase().contains("disablecomponent( " + component.toLowerCase());
+
+                FormInitialization.ConditionalDefault cd = new FormInitialization.ConditionalDefault();
+                cd.setComponent(component);
+                cd.setCondition(condition);
+                cd.setValue(value);
+                cd.setDisabled(disabled);
+                cd.setDescription(describeConditionalDefault(component, condition, disabled));
+                cd.setMigration(suggestConditionalMigration(component, condition, disabled));
+                init.getConditionalDefaults().add(cd);
+                foundAssignment = true;
+            }
+
+            if (foundAssignment) {
+                conditionalRanges.add(new int[]{blockStart, blockEnd});
+            }
+        }
+    }
+
+    private String describeConditionalDefault(String component, String condition, boolean disabled) {
+        String desc = component + " pré-selecionado quando " + condition;
+        if (disabled) desc += " e desabilitado";
+        return desc;
+    }
+
+    private String suggestConditionalMigration(String component, String condition, boolean disabled) {
+        if (disabled)
+            return "Se condição (" + condition + ") verdadeira, pré-selecionar e desabilitar campo no ngOnInit";
+        return "Se condição (" + condition + ") verdadeira, pré-selecionar campo no ngOnInit";
+    }
+
+    // ── 3. Combo Pre-selection ─────────────────────────────────────────────
+
+    private void extractComboPreselections(String body, String context, FormInitialization init) {
+        // Padrão 1: loop com Items.Items[i].Selected := True e comparação de Key
+        // for i := ... if ((Items.Items[i].Key = '1') or ...) then Items.Items[i].Selected := True;
+        Pattern loopSelectPattern = Pattern.compile(
+                "(?i)for\\s+\\w+\\s*:=[\\s\\S]*?Selected\\s*:=\\s*True[\\s\\S]*?;",
+                Pattern.DOTALL);
+        Matcher m1 = loopSelectPattern.matcher(body);
+        while (m1.find()) {
+            String block = m1.group(0);
+            // Extrai as keys comparadas: Key = '1', Key = '2', etc.
+            List<String> keys = new ArrayList<>();
+            Matcher keyM = Pattern.compile("(?i)Key\\s*=\\s*'([^']*)'").matcher(block);
+            while (keyM.find()) {
+                keys.add(keyM.group(1));
+            }
+
+            // Tenta encontrar o componente (procura no contexto antes do loop)
+            String component = findComponentBeforePosition(body, m1.start());
+
+            FormInitialization.ComboPreselection cp = new FormInitialization.ComboPreselection();
+            cp.setComponent(component);
+            cp.setSelectedKeys(keys.isEmpty() ? null : keys);
+            cp.setDescription("Pré-seleciona itens " + (keys.isEmpty() ? "no combo" : keys.toString()) + " ao abrir a tela");
+            cp.setMigration("Inicializar formControl com " + (keys.isEmpty() ? "valores pré-selecionados" : keys.toString()) + " no buildFormGroup()");
+            init.getComboPreselections().add(cp);
+        }
+
+        // Padrão 2: Atribuição direta combo.KeyValue := valor (fora de condicionais simples)
+        Pattern keyValuePattern = Pattern.compile(
+                "(?i)(\\w+)\\.KeyValue\\s*:=\\s*([^;]+);");
+        Matcher m2 = keyValuePattern.matcher(body);
+        while (m2.find()) {
+            String component = m2.group(1);
+            String value = m2.group(2).trim();
+
+            // Verifica se já foi capturado como conditional default
+            boolean alreadyCaptured = init.getConditionalDefaults().stream()
+                    .anyMatch(cd -> cd.getComponent().equalsIgnoreCase(component));
+            if (alreadyCaptured) continue;
+
+            FormInitialization.ComboPreselection cp = new FormInitialization.ComboPreselection();
+            cp.setComponent(component);
+            cp.setSelectedKeys(List.of(value));
+            cp.setDescription(component + " pré-selecionado com valor " + value);
+            cp.setMigration("Inicializar formControl com valor " + value + " no buildFormGroup()");
+            init.getComboPreselections().add(cp);
+        }
+
+        // Padrão 3: SelectAll / CheckAll em multiselect
+        Pattern selectAllPattern = Pattern.compile(
+                "(?i)(\\w+)\\.(SelectAll|CheckAll|SetAllSelected)\\b");
+        Matcher m3 = selectAllPattern.matcher(body);
+        while (m3.find()) {
+            FormInitialization.ComboPreselection cp = new FormInitialization.ComboPreselection();
+            cp.setComponent(m3.group(1));
+            cp.setDescription(m3.group(1) + " — todos os itens pré-selecionados ao abrir");
+            cp.setMigration("Usar [ngSelectAllItensPredefined]='true' no app-dropdown-multiselect");
+            init.getComboPreselections().add(cp);
+        }
+    }
+
+    private String findComponentBeforePosition(String body, int pos) {
+        // Procura o componente mais próximo antes da posição (padrão: with ComponentName do)
+        String before = body.substring(Math.max(0, pos - 500), pos);
+        Matcher wm = Pattern.compile("(?i)(?:with\\s+)(\\w+)").matcher(before);
+        String last = null;
+        while (wm.find()) last = wm.group(1);
+        if (last != null) return last;
+
+        // Procura atribuição a .Items ou referência a componente
+        Matcher cm = Pattern.compile("(?i)(\\w+)\\.Items").matcher(before);
+        while (cm.find()) last = cm.group(1);
+        return last != null ? last : "unknown";
+    }
+
+    // ── 4. Auto-load ───────────────────────────────────────────────────────
+
+    private static final Pattern AUTO_LOAD_PATTERN = Pattern.compile(
+            "(?i)(?:^|;|\\bthen\\b|\\bdo\\b|\\bbegin\\b)\\s*((?:Carregar|Pesquisar|Listar|Load|Buscar|Atualizar|Consultar|Preencher|Montar|Popular|Refresh)\\w*)\\s*(?:\\([^)]*\\))?\\s*;",
+            Pattern.MULTILINE);
+
+    private void extractAutoLoads(String body, String context, FormInitialization init) {
+        Matcher m = AUTO_LOAD_PATTERN.matcher(body);
+        Set<String> seen = new HashSet<>();
+        while (m.find()) {
+            String method = m.group(1);
+            if (!seen.add(method.toLowerCase())) continue;
+
+            FormInitialization.AutoLoad al = new FormInitialization.AutoLoad();
+            al.setMethod(method);
+            al.setContext(context);
+            al.setDescription("Pesquisa/carga executada automaticamente ao abrir a tela");
+            al.setMigration("Chamar handlePesquisar() no ngAfterViewInit após inicializar filtros");
+            init.getAutoLoads().add(al);
+        }
+    }
+
+    // ── 5. Initial State (Disable/Enable/Visible) ─────────────────────────
+
+    private void extractInitialStates(String body, String context, FormInitialization init, List<int[]> conditionalRanges) {
+        // Padrão 1: TLogusWinControl.DisableComponent(campo)
+        Pattern disablePattern = Pattern.compile(
+                "(?i)TLogusWinControl\\.DisableComponent\\s*\\(\\s*(\\w+)\\s*\\)");
+        Matcher m1 = disablePattern.matcher(body);
+        while (m1.find()) {
+            // Pula se já capturado como conditional default
+            if (isInRange(m1.start(), conditionalRanges)) continue;
+
+            String component = m1.group(1);
+            boolean alreadyCaptured = init.getConditionalDefaults().stream()
+                    .anyMatch(cd -> cd.getComponent().equalsIgnoreCase(component) && cd.isDisabled());
+            if (alreadyCaptured) continue;
+
+            FormInitialization.InitialState is = new FormInitialization.InitialState();
+            is.setComponent(component);
+            is.setState("disabled");
+            is.setDescription(component + " sempre desabilitado ao abrir (preenchido automaticamente)");
+            is.setMigration("Adicionar [disabled]='true' ou readonly no input");
+            init.getInitialStates().add(is);
+        }
+
+        // Padrão 2: TLogusWinControl.EnableComponent(campo, condição)
+        Pattern enablePattern = Pattern.compile(
+                "(?i)TLogusWinControl\\.EnableComponent\\s*\\(\\s*(\\w+)\\s*(?:,\\s*([^)]+))?\\)");
+        Matcher m2 = enablePattern.matcher(body);
+        while (m2.find()) {
+            if (isInRange(m2.start(), conditionalRanges)) continue;
+
+            FormInitialization.InitialState is = new FormInitialization.InitialState();
+            is.setComponent(m2.group(1));
+            is.setState("enabled");
+            if (m2.group(2) != null) is.setCondition(m2.group(2).trim());
+            is.setDescription(m2.group(1) + " habilitado" + (m2.group(2) != null ? " quando " + m2.group(2).trim() : ""));
+            is.setMigration("Controlar com [disabled] binding condicional no template");
+            init.getInitialStates().add(is);
+        }
+
+        // Padrão 3: campo.Enabled := False / campo.Visible := False (fora de condicionais)
+        Pattern propStatePattern = Pattern.compile(
+                "(?i)(\\w+)\\.(Enabled|Visible|ReadOnly)\\s*:=\\s*(True|False)\\s*;");
+        Matcher m3 = propStatePattern.matcher(body);
+        while (m3.find()) {
+            if (isInRange(m3.start(), conditionalRanges)) continue;
+            if (m3.group(1).equalsIgnoreCase("Self") || m3.group(1).equalsIgnoreCase("Result")) continue;
+
+            String component = m3.group(1);
+            String property = m3.group(2);
+            boolean boolValue = m3.group(3).equalsIgnoreCase("True");
+
+            String state;
+            if (property.equalsIgnoreCase("Enabled")) state = boolValue ? "enabled" : "disabled";
+            else if (property.equalsIgnoreCase("Visible")) state = boolValue ? "visible" : "hidden";
+            else state = boolValue ? "readonly" : "editable";
+
+            FormInitialization.InitialState is = new FormInitialization.InitialState();
+            is.setComponent(component);
+            is.setState(state);
+            is.setDescription(component + " " + state + " ao abrir a tela");
+            is.setMigration(suggestStateMigration(state));
+            init.getInitialStates().add(is);
+        }
+    }
+
+    private String suggestStateMigration(String state) {
+        return switch (state) {
+            case "disabled" -> "Adicionar [disabled]='true' ou readonly no input";
+            case "hidden" -> "Usar *ngIf='false' ou [hidden]='true' no template";
+            case "readonly" -> "Adicionar readonly no input ou [readOnly]='true'";
+            default -> "Verificar estado inicial do componente no template Angular";
+        };
+    }
+
+    private boolean isInRange(int pos, List<int[]> ranges) {
+        for (int[] range : ranges) {
+            if (pos >= range[0] && pos <= range[1]) return true;
+        }
+        return false;
+    }
+
     // ── Business Rules ───────────────────────────────────────────────────────
 
     public List<BusinessRule> extractBusinessRules(String src) {

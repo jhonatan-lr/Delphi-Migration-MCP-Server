@@ -190,6 +190,159 @@ class DelphiSourceParserTest {
                 });
     }
 
+    // ── Form Initialization Tests ─────────────────────────────────────────
+
+    @Test
+    @DisplayName("Deve detectar AUTO_LOAD no FormCreate do SAMPLE_UNIT")
+    void testFormInitAutoLoad() {
+        List<FormInitialization> inits = parser.extractFormInitialization(SAMPLE_UNIT);
+        assertFalse(inits.isEmpty(), "Deve encontrar inicialização no FormCreate");
+
+        boolean hasAutoLoad = inits.stream()
+                .flatMap(i -> i.getAutoLoads().stream())
+                .anyMatch(al -> al.getMethod().contains("CarregarClientes"));
+        assertTrue(hasAutoLoad, "Deve detectar CarregarClientes como AUTO_LOAD");
+    }
+
+    private static final String FORMSHOW_SAMPLE = """
+            unit f_MonitorPedido;
+
+            interface
+            uses Windows, SysUtils, Classes;
+
+            type
+              TfrmMonitorPedido = class(TForm)
+                edtDataEmissaoDe: TJvDateEdit;
+                edtDataEmissaoAte: TJvDateEdit;
+                lucFilial: TLgCorporativoLookupComboEdit;
+                edtNomeFornecedorDisplay: TEdit;
+                lucSituacaoPedido: TLgCheckListCombo;
+                procedure FormShow(Sender: TObject);
+              end;
+
+            implementation
+
+            procedure TfrmMonitorPedido.FormShow(Sender: TObject);
+            var
+              i: Integer;
+            begin
+              TLogusWinControl.DisableComponent(edtNomeFornecedorDisplay);
+              edtDataEmissaoDe.Date := Conexao.Date;
+              edtDataEmissaoAte.Date := Conexao.Date;
+              if (Buf_Filial.Cdg_Filial <> 0) then
+              begin
+                lucFilial.KeyValue := Buf_Filial.Cdg_Filial;
+                TLogusWinControl.DisableComponent(lucFilial);
+              end;
+              with lucSituacaoPedido do
+              begin
+                for i := 1 to (Items.Count - 1) do
+                begin
+                  if ((Items.Items[i].Key = '1') or (Items.Items[i].Key = '2')) then
+                  begin
+                    Items.Items[i].Selected := True;
+                  end;
+                end;
+              end;
+              CarregarListaPedidoAutomatico;
+            end;
+
+            end.
+            """;
+
+    @Test
+    @DisplayName("Deve detectar DEFAULT_VALUE de datas no FormShow")
+    void testFormShowDefaultValues() {
+        List<FormInitialization> inits = parser.extractFormInitialization(FORMSHOW_SAMPLE);
+        assertFalse(inits.isEmpty(), "Deve encontrar FormShow");
+
+        FormInitialization formShow = inits.stream()
+                .filter(i -> "FormShow".equals(i.getContext()))
+                .findFirst().orElseThrow();
+
+        assertTrue(formShow.getDefaultValues().size() >= 2,
+                "Deve detectar pelo menos 2 default values (datas)");
+
+        boolean hasDataDe = formShow.getDefaultValues().stream()
+                .anyMatch(dv -> "edtDataEmissaoDe".equals(dv.getComponent()) && "Date".equals(dv.getProperty()));
+        assertTrue(hasDataDe, "Deve detectar edtDataEmissaoDe.Date := Conexao.Date");
+    }
+
+    @Test
+    @DisplayName("Deve detectar CONDITIONAL_DEFAULT com filial")
+    void testFormShowConditionalDefault() {
+        List<FormInitialization> inits = parser.extractFormInitialization(FORMSHOW_SAMPLE);
+        FormInitialization formShow = inits.stream()
+                .filter(i -> "FormShow".equals(i.getContext()))
+                .findFirst().orElseThrow();
+
+        assertFalse(formShow.getConditionalDefaults().isEmpty(),
+                "Deve detectar conditional defaults");
+
+        boolean hasFilial = formShow.getConditionalDefaults().stream()
+                .anyMatch(cd -> "lucFilial".equals(cd.getComponent()) && cd.isDisabled());
+        assertTrue(hasFilial, "Deve detectar lucFilial com disabled=true dentro de if Buf_Filial");
+    }
+
+    @Test
+    @DisplayName("Deve detectar COMBO_PRESELECTION com keys 1 e 2")
+    void testFormShowComboPreselection() {
+        List<FormInitialization> inits = parser.extractFormInitialization(FORMSHOW_SAMPLE);
+        FormInitialization formShow = inits.stream()
+                .filter(i -> "FormShow".equals(i.getContext()))
+                .findFirst().orElseThrow();
+
+        assertFalse(formShow.getComboPreselections().isEmpty(),
+                "Deve detectar combo preselections");
+
+        boolean hasKeys = formShow.getComboPreselections().stream()
+                .anyMatch(cp -> cp.getSelectedKeys() != null &&
+                               cp.getSelectedKeys().contains("1") &&
+                               cp.getSelectedKeys().contains("2"));
+        assertTrue(hasKeys, "Deve detectar keys '1' e '2' pré-selecionadas");
+    }
+
+    @Test
+    @DisplayName("Deve detectar AUTO_LOAD CarregarListaPedidoAutomatico")
+    void testFormShowAutoLoad() {
+        List<FormInitialization> inits = parser.extractFormInitialization(FORMSHOW_SAMPLE);
+        FormInitialization formShow = inits.stream()
+                .filter(i -> "FormShow".equals(i.getContext()))
+                .findFirst().orElseThrow();
+
+        boolean hasCarregar = formShow.getAutoLoads().stream()
+                .anyMatch(al -> "CarregarListaPedidoAutomatico".equals(al.getMethod()));
+        assertTrue(hasCarregar, "Deve detectar CarregarListaPedidoAutomatico como AUTO_LOAD");
+    }
+
+    @Test
+    @DisplayName("Deve detectar INITIAL_STATE DisableComponent(edtNomeFornecedorDisplay)")
+    void testFormShowInitialState() {
+        List<FormInitialization> inits = parser.extractFormInitialization(FORMSHOW_SAMPLE);
+        FormInitialization formShow = inits.stream()
+                .filter(i -> "FormShow".equals(i.getContext()))
+                .findFirst().orElseThrow();
+
+        boolean hasDisabled = formShow.getInitialStates().stream()
+                .anyMatch(is -> "edtNomeFornecedorDisplay".equals(is.getComponent()) &&
+                               "disabled".equals(is.getState()));
+        assertTrue(hasDisabled, "Deve detectar edtNomeFornecedorDisplay disabled");
+    }
+
+    @Test
+    @DisplayName("totalDetected deve somar todas as categorias")
+    void testTotalDetected() {
+        List<FormInitialization> inits = parser.extractFormInitialization(FORMSHOW_SAMPLE);
+        FormInitialization formShow = inits.stream()
+                .filter(i -> "FormShow".equals(i.getContext()))
+                .findFirst().orElseThrow();
+
+        assertTrue(formShow.totalDetected() >= 5,
+                "totalDetected deve ser >= 5 (2 defaults + 1 conditional + 1 combo + 1 autoload + 1 state). Got: " + formShow.totalDetected());
+    }
+
+    // ── Type Mapping Tests ──────────────────────────────────────────────────
+
     @Test
     @DisplayName("Deve mapear tipos Delphi para Java")
     void testTypeMapping() {
