@@ -398,10 +398,19 @@ class GenerateJavaClassTool extends BaseTool {
                             }
                         }
                     }
-                    // Tabela principal para Repository/Vo/PesquisaDto
+                    // Tabela principal e entityClassName para Repository/Vo/PesquisaDto
                     String tableForRepo = extractMainTable(unit.getSqlQueries(), 0);
+                    String entityClassForRepo = null;
+                    if (tableForRepo != null) {
+                        TargetPatterns tpRepo = ProjectProfileStore.getInstance().getPatterns();
+                        if (tpRepo != null && tpRepo.getKnownTables().containsKey(tableForRepo)) {
+                            entityClassForRepo = tpRepo.getKnownTables().get(tableForRepo).getEntity();
+                            if (entityClassForRepo != null) entityClassForRepo = entityClassForRepo.replace("Entity", "");
+                        }
+                    }
+                    String repoBase = entityClassForRepo != null ? entityClassForRepo : cleanBase;
                     if (generate.contains("repository")) {
-                        generatedFiles.put(cleanBase + "Repository.java", generator.generateRepository(dc, packageName, tableForRepo, finalDfmFields));
+                        generatedFiles.put(repoBase + "Repository.java", generator.generateRepository(dc, packageName, tableForRepo, finalDfmFields, entityClassForRepo));
                     }
                     if (generate.contains("service")) {
                         generatedFiles.put(cleanBase + "Service.java", generator.generateService(dc, packageName, unit.getSqlQueries(), unit.getBusinessRules()));
@@ -411,10 +420,10 @@ class GenerateJavaClassTool extends BaseTool {
                     }
                     if (generate.contains("dto")) {
                         generatedFiles.put(cleanBase + "Dto.java", generator.generateDto(dc, packageName, finalDfmFields));
-                        generatedFiles.put("Pesquisa" + cleanBase + "Dto.java", generator.generatePesquisaDto(dc, packageName, finalDfmFields, tableForRepo));
+                        generatedFiles.put("Pesquisa" + repoBase + "Dto.java", generator.generatePesquisaDto(dc, packageName, finalDfmFields, tableForRepo, entityClassForRepo));
                     }
                     if (generate.contains("vo")) {
-                        generatedFiles.put("Grid" + cleanBase + "Vo.java", generator.generateVo(dc, packageName, finalDfmFields, tableForRepo));
+                        generatedFiles.put("Grid" + repoBase + "Vo.java", generator.generateVo(dc, packageName, finalDfmFields, tableForRepo, entityClassForRepo));
                     }
                 }
 
