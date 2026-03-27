@@ -1211,10 +1211,19 @@ public class JavaCodeGenerator {
             }
         }
 
+        // Coletar imports de enums
+        Set<String> enumImports = new LinkedHashSet<>();
+        for (EntityField ef : voFields) {
+            if (ef.isEnum && ef.enumClassName != null) {
+                enumImports.add("import logus.corporativo.api.ennumerator." + modulo + "." + ef.enumClassName + ";\n");
+            }
+        }
+
         StringBuilder sb = new StringBuilder();
         sb.append("package ").append(packageName).append(".vo.").append(modulo).append(";\n\n");
         sb.append("import logus.corporativo.api.lazyload.LazyLoadField;\n");
         sb.append("import logusretail.manager.type.LogusDateTime;\n");
+        for (String imp : enumImports) sb.append(imp);
         sb.append("import java.io.Serializable;\n");
         sb.append("import java.math.BigDecimal;\n\n");
 
@@ -1226,15 +1235,21 @@ public class JavaCodeGenerator {
         sb.append("    private Integer id;\n\n");
 
         for (EntityField ef : voFields) {
-            // @LazyLoadField
-            if (ef.manyToOneEntity != null) {
+            if (ef.isEnum) {
+                // Enum → 2 campos: value (Integer) + descricao (String)
+                sb.append("    @LazyLoadField(entityField = { \"").append(ef.javaName).append("\" })\n");
+                sb.append("    private Integer ").append(ef.javaName).append(";\n\n");
+                sb.append("    private String descricao").append(capitalize(ef.javaName)).append(";\n\n");
+            } else if (ef.manyToOneEntity != null) {
                 sb.append("    @LazyLoadField(entityField = { \"").append(ef.javaName).append(".id\" })\n");
+                sb.append("    private Integer ").append(ef.javaName).append(";\n\n");
+            } else if (ef.isDate) {
+                sb.append("    @LazyLoadField(entityField = { \"").append(ef.javaName).append("\" })\n");
+                sb.append("    private String ").append(ef.javaName).append(";\n\n");
             } else {
                 sb.append("    @LazyLoadField(entityField = { \"").append(ef.javaName).append("\" })\n");
+                sb.append("    private ").append(ef.javaType).append(" ").append(ef.javaName).append(";\n\n");
             }
-            // Tipo no Vo: datas viram String, FKs viram Integer, enums viram Integer+String
-            String voType = voFieldType(ef);
-            sb.append("    private ").append(voType).append(" ").append(ef.javaName).append(";\n\n");
         }
 
         // ── Constructor all-args (para SELECT NEW) ──
@@ -1248,10 +1263,11 @@ public class JavaCodeGenerator {
         sb.append(") {\n");
         sb.append("        this.id = id;\n");
         for (EntityField ef : voFields) {
-            if (ef.isDate) {
+            if (ef.isEnum) {
+                sb.append("        this.").append(ef.javaName).append(" = ").append(ef.javaName).append(" == null ? null : ").append(ef.javaName).append(".getValue();\n");
+                sb.append("        this.descricao").append(capitalize(ef.javaName)).append(" = ").append(ef.javaName).append(" == null ? null : ").append(ef.javaName).append(".getText();\n");
+            } else if (ef.isDate) {
                 sb.append("        this.").append(ef.javaName).append(" = this.formatarData(").append(ef.javaName).append(");\n");
-            } else if (ef.manyToOneEntity != null) {
-                sb.append("        this.").append(ef.javaName).append(" = ").append(ef.javaName).append(";\n");
             } else {
                 sb.append("        this.").append(ef.javaName).append(" = ").append(ef.javaName).append(";\n");
             }
@@ -1269,6 +1285,14 @@ public class JavaCodeGenerator {
             sb.append("        return this.").append(ef.javaName).append(";\n    }\n\n");
             sb.append("    public void set").append(cap).append("(").append(voType).append(" ").append(ef.javaName).append(") {\n");
             sb.append("        this.").append(ef.javaName).append(" = ").append(ef.javaName).append(";\n    }\n\n");
+            // Enum: getter/setter para descricao
+            if (ef.isEnum) {
+                String descName = "descricao" + cap;
+                sb.append("    public String get").append(capitalize(descName)).append("() {\n");
+                sb.append("        return this.").append(descName).append(";\n    }\n\n");
+                sb.append("    public void set").append(capitalize(descName)).append("(String ").append(descName).append(") {\n");
+                sb.append("        this.").append(descName).append(" = ").append(descName).append(";\n    }\n\n");
+            }
         }
 
         // ── formatarData helper ──
@@ -1288,11 +1312,11 @@ public class JavaCodeGenerator {
         return ef.javaType;
     }
 
-    /** Tipo do parâmetro no constructor (recebido do SELECT NEW): datas→LogusDateTime, FKs→Integer */
+    /** Tipo do parâmetro no constructor (recebido do SELECT NEW): datas→LogusDateTime, enums→EnumClass */
     private String ctorParamType(EntityField ef) {
         if (ef.isDate) return "LogusDateTime";
         if (ef.manyToOneEntity != null) return "Integer";
-        if (ef.isEnum) return "Integer";
+        if (ef.isEnum && ef.enumClassName != null) return ef.enumClassName;
         return ef.javaType;
     }
 
