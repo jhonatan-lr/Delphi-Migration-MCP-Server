@@ -3,6 +3,16 @@
 Gaps concretos identificados durante testes com 4+ telas reais do Logus ERP.
 Organizados por prioridade de impacto no código gerado.
 
+## Resolvidos
+
+- [x] Gap 1: DataGridItem com buildDataGridItem + cells reais
+- [x] Gap 3: Service com BehaviorSubject padrão real (getGrid, changePage, etc)
+- [x] Gap 4: Repository JPQL já usa campos reais (buildSelectNew)
+- [x] Gap 6: Container com Pages enum e changePage()
+- [x] Gap 7: HTTP Service com URL_API de app/startup.service
+
+## Pendentes
+
 ---
 
 ## ALTO IMPACTO
