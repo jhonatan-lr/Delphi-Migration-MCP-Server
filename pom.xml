@@ -75,6 +75,15 @@
             <version>5.10.2</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- Informix JDBC Driver (local jar) -->
+        <dependency>
+            <groupId>com.ibm.informix</groupId>
+            <artifactId>ifxjdbc</artifactId>
+            <version>4.10.6</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/lib/ifxjdbc.jar</systemPath>
+        </dependency>
     </dependencies>
 
     <build>
@@ -99,6 +108,17 @@
                                 </transformer>
                             </transformers>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <!-- Incluir ifxjdbc.jar (system scope) no fat jar -->
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
                         </configuration>
                     </execution>
                 </executions>

@@ -977,6 +977,86 @@ class GenerateFullModuleTool extends BaseTool {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// TOOL: learn_database — Extrai metadados do banco Informix (SOMENTE LEITURA)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class LearnDatabaseTool extends BaseTool {
+
+    private final com.migration.mcp.parser.DatabaseLearner learner = new com.migration.mcp.parser.DatabaseLearner();
+
+    @Override
+    public McpServerFeatures.SyncToolSpecification getSpecification() {
+        McpSchema.Tool tool = new McpSchema.Tool(
+                "learn_database",
+                "Conecta ao banco Informix via JDBC e extrai metadados reais: tabelas, colunas, tipos, " +
+                "PKs, FKs. Enriquece o entity-patterns.json com dados 100% confiáveis. " +
+                "SOMENTE LEITURA — nunca executa INSERT/UPDATE/DELETE/DROP/ALTER.",
+                """
+                {
+                  "type": "object",
+                  "properties": {
+                    "jdbc_url": {"type": "string", "description": "Connection string JDBC (ex: jdbc:informix-sqli://host:port/db:INFORMIXSERVER=srv)"},
+                    "username": {"type": "string", "description": "Usuário do banco"},
+                    "password": {"type": "string", "description": "Senha do banco"},
+                    "tables_filter": {"type": "array", "items": {"type": "string"}, "description": "Prefixos de tabelas a extrair (ex: ['est', 'cad']). Se omitido, extrai tudo."}
+                  },
+                  "required": ["jdbc_url", "username", "password"]
+                }
+                """
+        );
+        return new McpServerFeatures.SyncToolSpecification(tool, (exchange, args) -> withLogging("learn_database", args, () -> {
+                String jdbcUrl = requireString(args, "jdbc_url");
+                String username = requireString(args, "username");
+                String password = requireString(args, "password");
+
+                @SuppressWarnings("unchecked")
+                List<String> tablesFilter = args.containsKey("tables_filter")
+                        ? (List<String>) args.get("tables_filter")
+                        : null;
+
+                // SEGURANÇA: verifica que a URL não contém comandos perigosos
+                String urlLower = jdbcUrl.toLowerCase();
+                if (urlLower.contains("drop") || urlLower.contains("delete") || urlLower.contains("truncate")) {
+                    return error("URL rejeitada por conter palavras perigosas.");
+                }
+
+                TargetPatterns patterns = learner.learn(jdbcUrl, username, password, tablesFilter);
+
+                // Persiste o resultado
+                ProjectProfileStore store = ProjectProfileStore.getInstance();
+                // Merge com patterns existentes (preserva columnNameExpansions e knownEnums manuais)
+                TargetPatterns existing = store.getPatterns();
+                if (existing != null) {
+                    // Preserva expansões manuais
+                    patterns.getColumnNameExpansions().putAll(existing.getColumnNameExpansions());
+                    // Preserva enums manuais (banco não tem essa info)
+                    patterns.getKnownEnums().putAll(existing.getKnownEnums());
+                    // Preserva stringForeignKeys manuais
+                    patterns.setStringForeignKeys(existing.getStringForeignKeys());
+                }
+
+                // Salva em disco
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper()
+                        .enable(com.fasterxml.jackson.databind.SerializationFeature.INDENT_OUTPUT);
+                Path patternsFile = Path.of(System.getProperty("user.home", "C:\\Users\\Usuario"), ".delphi-mcp", "entity-patterns.json");
+                Files.createDirectories(patternsFile.getParent());
+                mapper.writeValue(patternsFile.toFile(), patterns);
+                log.info("Patterns salvos em {}", patternsFile);
+
+                // Recarrega
+                store.loadPatterns(null);
+
+                return success(Map.of(
+                        "status", "Metadados do banco extraídos com sucesso",
+                        "tablesExtracted", patterns.getKnownTables().size(),
+                        "foreignKeysExtracted", patterns.getKnownForeignKeys().size(),
+                        "masterDetailRelationships", patterns.getMasterDetailRelationships().size(),
+                        "savedTo", patternsFile.toString()
+                ));
+        }));
+    }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // TOOL: load_target_patterns — Carrega entity-patterns.json
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 class LoadTargetPatternsTool extends BaseTool {

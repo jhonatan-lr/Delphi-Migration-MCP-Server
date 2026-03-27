@@ -1,5 +1,19 @@
 # Delphi Migration MCP Server
 
+## REGRA CRITICA DE SEGURANCA — BANCO DE DADOS
+
+**NUNCA executar INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE ou qualquer comando que modifique o banco de dados.**
+
+O acesso ao banco Informix é SOMENTE LEITURA. A tool `learn_database` usa apenas SELECT em system catalog tables (systables, syscolumns, sysconstraints, sysindexes, sysreferences).
+
+- Banco de desenvolvimento: `bd_desenv_m`
+- Connection: `jdbc:informix-sqli://192.168.0.231:9088/bd_desenv_m:INFORMIXSERVER=ol_saturno`
+- Credenciais: informix/informix
+- **PROIBIDO**: INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, TRUNCATE, EXEC, CALL
+- **PERMITIDO**: SELECT apenas em system catalog tables (sys*)
+
+Se qualquer query que nao seja SELECT puro for detectada, a tool DEVE rejeitar e retornar erro.
+
 ## Build
 
 Este projeto requer **JDK 17**. O `JAVA_HOME` da maquina aponta para JDK 8 (usado pelo Logus), entao sempre setar explicitamente:

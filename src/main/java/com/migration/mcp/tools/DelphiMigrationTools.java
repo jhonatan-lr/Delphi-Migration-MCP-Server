@@ -22,6 +22,7 @@ public class DelphiMigrationTools {
     private final GenerateAngularComponent generateAngularTool;
     private final AnalyzeProjectTool    analyzeProjectTool;
     private final GenerateFullModuleTool generateFullModuleTool;
+    private final LearnDatabaseTool      learnDatabaseTool;
     private final LoadTargetPatternsTool loadPatternsTool;
     private final GetUsageGuideTool     usageGuideTool;
 
@@ -39,6 +40,7 @@ public class DelphiMigrationTools {
         this.generateAngularTool = new GenerateAngularComponent();
         this.analyzeProjectTool  = new AnalyzeProjectTool();
         this.generateFullModuleTool = new GenerateFullModuleTool();
+        this.learnDatabaseTool   = new LearnDatabaseTool();
         this.loadPatternsTool    = new LoadTargetPatternsTool();
         this.usageGuideTool      = new GetUsageGuideTool();
     }
@@ -63,6 +65,7 @@ public class DelphiMigrationTools {
                 generateJavaTool.getSpecification(),
                 generateAngularTool.getSpecification(),
                 generateFullModuleTool.getSpecification(),
+                learnDatabaseTool.getSpecification(),
                 loadPatternsTool.getSpecification()
         );
     }
