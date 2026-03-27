@@ -161,7 +161,9 @@ class ExtractBusinessRules extends BaseTool {
                 "Extrai regras de negócio do código Delphi: validações (if/then com ShowMessage ou raise), " +
                 "cálculos complexos, verificações de consistência. Também detecta lógica de inicialização " +
                 "de tela (FormShow/FormCreate): valores default, pré-seleções de combos, auto-loads e " +
-                "estados iniciais de componentes. Para cada regra, fornece estratégia de migração e código Java sugerido.",
+                "estados iniciais de componentes. Detecta regras de estado de botões (AfterScroll + Click): " +
+                "condições de habilitação, confirmações, ações executadas e permissões. " +
+                "Para cada regra, fornece estratégia de migração e código Java/Angular sugerido.",
                 buildInputSchema(
                         "content", "string", "Conteúdo do código Delphi (.pas)",
                         "file_path", "string", "Caminho para o arquivo .pas"
@@ -184,6 +186,13 @@ class ExtractBusinessRules extends BaseTool {
                     int totalInit = formInits.stream().mapToInt(FormInitialization::totalDetected).sum();
                     result.put("formInitializationTotal", totalInit);
                     result.put("formInitialization", formInits);
+                }
+
+                // Button state rules (AfterScroll + Click handlers)
+                List<ButtonStateRule> buttonRules = parser.extractButtonStateRules(content);
+                if (!buttonRules.isEmpty()) {
+                    result.put("buttonStateRulesTotal", buttonRules.size());
+                    result.put("buttonStateRules", buttonRules);
                 }
 
                 return success(result);

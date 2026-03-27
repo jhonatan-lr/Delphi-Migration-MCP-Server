@@ -1178,6 +1178,301 @@ public class DelphiSourceParser {
         return false;
     }
 
+    // ── Button State Rules (AfterScroll + Click handlers) ──────────────────
+
+    /**
+     * Extrai regras de estado de botões combinando:
+     * 1. AfterScroll → EnableComponent(button, condition) → quando habilitado
+     * 2. Click handlers → o que cada botão faz (confirmação, ação, navegação)
+     */
+    public List<ButtonStateRule> extractButtonStateRules(String src) {
+        Map<String, ButtonStateRule> ruleMap = new LinkedHashMap<>();
+
+        // ── Pass A: AfterScroll → EnableComponent ──
+        extractEnableComponentFromAfterScroll(src, ruleMap);
+
+        // ── Pass B: Click handlers → ações ──
+        extractClickHandlerActions(src, ruleMap);
+
+        // ── Pass C: Gera migration hints ──
+        for (ButtonStateRule rule : ruleMap.values()) {
+            generateMigrationHints(rule);
+        }
+
+        return new ArrayList<>(ruleMap.values());
+    }
+
+    private void extractEnableComponentFromAfterScroll(String src, Map<String, ButtonStateRule> ruleMap) {
+        // Encontra todos os métodos AfterScroll
+        Pattern afterScrollPattern = Pattern.compile(
+                "(?i)procedure\\s+\\w+\\.(\\w+AfterScroll)\\s*\\([^)]*\\)\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                Pattern.MULTILINE);
+        Matcher mm = afterScrollPattern.matcher(src);
+
+        while (mm.find()) {
+            String methodName = mm.group(1);
+            String body = mm.group(0);
+            if (body.length() > 15000) body = body.substring(0, 15000);
+
+            // Extrai nome do dataset do método (cdsPedidosAutomaticosAfterScroll → cdsPedidosAutomaticos)
+            String dataset = methodName.replaceAll("(?i)AfterScroll$", "");
+
+            // Encontra cada EnableComponent usando scanner de parênteses balanceados
+            Pattern enableStart = Pattern.compile("(?i)TLogusWinControl\\.EnableComponent\\s*\\(");
+            Matcher em = enableStart.matcher(body);
+
+            while (em.find()) {
+                int openParen = em.end() - 1; // posição do '('
+                String args = extractBalancedParens(body, openParen);
+                if (args == null) continue;
+
+                // Separa buttonName da condition no primeiro ',' top-level
+                int firstComma = findTopLevelComma(args);
+                if (firstComma < 0) continue;
+
+                String buttonName = args.substring(0, firstComma).trim();
+                String condition = args.substring(firstComma + 1).trim();
+
+                ButtonStateRule rule = ruleMap.computeIfAbsent(buttonName.toLowerCase(),
+                        k -> { ButtonStateRule r = new ButtonStateRule(); r.setButtonName(buttonName); return r; });
+                rule.setDataset(dataset);
+                rule.setEnableConditionRaw(condition);
+
+                // Extrai condições individuais (split por 'and'/'or' top-level)
+                parseEnableConditions(condition, rule);
+
+                // Extrai field references: FieldByName('campo')
+                Matcher fm = Pattern.compile("(?i)FieldByName\\s*\\(\\s*'([^']+)'\\s*\\)").matcher(condition);
+                while (fm.find()) {
+                    String field = fm.group(1);
+                    if (!rule.getFieldReferences().contains(field)) {
+                        rule.getFieldReferences().add(field);
+                    }
+                }
+
+                // Extrai permissões: Parametros.X.Y.Z
+                Matcher pm = Pattern.compile("(?i)(Parametros(?:\\.\\w+)+)").matcher(condition);
+                if (pm.find()) {
+                    rule.setRequiresPermission(pm.group(1));
+                }
+            }
+        }
+    }
+
+    private void extractClickHandlerActions(String src, Map<String, ButtonStateRule> ruleMap) {
+        // Encontra todos os métodos bbtXxxClick
+        Pattern clickPattern = Pattern.compile(
+                "(?i)procedure\\s+\\w+\\.(bbt\\w+Click)\\s*\\([^)]*\\)\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                Pattern.MULTILINE);
+        Matcher mm = clickPattern.matcher(src);
+
+        while (mm.find()) {
+            String methodName = mm.group(1);
+            String body = mm.group(0);
+            if (body.length() > 10000) body = body.substring(0, 10000);
+
+            // bbtCancelarClick → bbtCancelar
+            String buttonName = methodName.replaceAll("(?i)Click$", "");
+
+            ButtonStateRule rule = ruleMap.computeIfAbsent(buttonName.toLowerCase(),
+                    k -> { ButtonStateRule r = new ButtonStateRule(); r.setButtonName(buttonName); return r; });
+            rule.setSourceMethod(methodName);
+
+            // Detecta confirmação: TLogusMessage.Confirm('...' + expr + '...')
+            Matcher cm = Pattern.compile("(?i)TLogusMessage\\.Confirm\\s*\\(").matcher(body);
+            if (cm.find()) {
+                String rawMsg = extractBalancedParens(body, cm.end() - 1);
+                if (rawMsg != null) {
+                    rule.setConfirmMessage(cleanConfirmMessage(rawMsg));
+                }
+            }
+
+            // Detecta tipo de ação e ação principal
+            detectActionFromBody(body, buttonName, rule);
+        }
+    }
+
+    private void detectActionFromBody(String body, String buttonName, ButtonStateRule rule) {
+        String lowerBody = body.toLowerCase();
+
+        // Navega para outra tela: TfrmXxx.MakeShowModal ou TfrmXxx.ShowModal
+        Matcher navM = Pattern.compile("(?i)(T\\w+)\\.(?:MakeShowModal|ShowModal|Show)\\s*(?:\\(|;)").matcher(body);
+        if (navM.find()) {
+            String targetForm = navM.group(1);
+            // Se o form é o mesmo da unit, ignora (chamada recursiva)
+            if (!targetForm.equalsIgnoreCase("Self")) {
+                rule.setActionType("navigation");
+                rule.setAction(targetForm + "." + (body.contains("MakeShowModal") ? "MakeShowModal" : "ShowModal"));
+                return;
+            }
+        }
+
+        // Relatório: Imprimir, Relatorio
+        if (lowerBody.contains(".imprimir") || lowerBody.contains("relatorio")) {
+            Matcher repM = Pattern.compile("(?i)(T\\w+)\\.Imprimir\\s*\\(").matcher(body);
+            if (repM.find()) {
+                rule.setActionType("report");
+                rule.setAction(repM.group(1) + ".Imprimir");
+                return;
+            }
+            rule.setActionType("report");
+            rule.setAction("Imprimir");
+            return;
+        }
+
+        // Business method: variável local de tipo TXxx chamando um método
+        // Detecta var block: var\n  vNome: TTipo;\n  ...begin
+        Matcher varBlock = Pattern.compile("(?is)\\bvar\\b(.*?)\\bbegin\\b").matcher(body);
+        if (varBlock.find()) {
+            String vars = varBlock.group(1);
+            // Extrai variáveis tipadas: vNome: TTipo
+            Matcher varM = Pattern.compile("(\\w+)\\s*:\\s*(T\\w+)\\s*;").matcher(vars);
+            while (varM.find()) {
+                String varName = varM.group(1);
+                String varType = varM.group(2);
+                // Procura chamada: varName.Method (não Create, não Free)
+                Pattern callP = Pattern.compile("(?i)\\b" + Pattern.quote(varName) + "\\.(\\w+)\\s*(?:;|\\()");
+                Matcher callM = callP.matcher(body);
+                while (callM.find()) {
+                    String method = callM.group(1);
+                    if (!method.equalsIgnoreCase("Create") && !method.equalsIgnoreCase("Free") &&
+                        !method.equalsIgnoreCase("Destroy")) {
+                        rule.setActionType("business_method");
+                        rule.setAction(varType + "." + method);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Pesquisar / Carregar: chamada a método local
+        if (lowerBody.contains("carregar") || lowerBody.contains("pesquisar") || lowerBody.contains("listar")) {
+            rule.setActionType("search");
+            Matcher searchM = Pattern.compile("(?i)(Carregar\\w+|Pesquisar\\w*|Listar\\w*)").matcher(body);
+            if (searchM.find()) rule.setAction(searchM.group(1));
+            return;
+        }
+
+        // Navegação para página: changePage, Novo, Editar
+        String btnLower = buttonName.toLowerCase();
+        if (btnLower.contains("novo") || btnLower.contains("incluir") || btnLower.contains("editar")) {
+            rule.setActionType("crud");
+            rule.setAction(btnLower.contains("novo") ? "Novo registro" : "Editar registro");
+            return;
+        }
+
+        // Sair
+        if (btnLower.contains("sair") || btnLower.contains("fechar") || lowerBody.contains("close") || lowerBody.contains("modalresult")) {
+            rule.setActionType("navigation");
+            rule.setAction("Fechar tela");
+            return;
+        }
+    }
+
+    private void parseEnableConditions(String condition, ButtonStateRule rule) {
+        // Divide por 'and' e 'or' preservando a estrutura
+        // Remove parênteses externas e normaliza espaços
+        String clean = condition.replaceAll("\\s+", " ").trim();
+        // Split simples por and/or — cada parte é uma condição individual
+        String[] parts = clean.split("(?i)\\b(?:and|or)\\b");
+        for (String part : parts) {
+            String trimmed = part.trim().replaceAll("^\\(+|\\)+$", "").trim();
+            if (!trimmed.isEmpty() && trimmed.length() > 2) {
+                rule.getEnableConditions().add(trimmed);
+            }
+        }
+    }
+
+    private String cleanConfirmMessage(String raw) {
+        // 'Deseja cancelar ' + variable + '?'  →  "Deseja cancelar {variable}?"
+        StringBuilder result = new StringBuilder();
+        String[] parts = raw.split("\\+");
+        for (String part : parts) {
+            String trimmed = part.trim();
+            // Primeiro: checa se é FieldByName (contém aspas internas mas não é string literal)
+            Matcher fbm = Pattern.compile("(?i)FieldByName\\s*\\(\\s*'([^']+)'\\s*\\)").matcher(trimmed);
+            if (fbm.find()) {
+                result.append("{").append(fbm.group(1)).append("}");
+            } else if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+                // String literal pura: 'texto'
+                result.append(trimmed.substring(1, trimmed.length() - 1));
+            } else {
+                Matcher strLit = Pattern.compile("'([^']*)'").matcher(trimmed);
+                if (strLit.find()) {
+                    result.append(strLit.group(1));
+                } else {
+                    // Other variable
+                    String varName = trimmed.replaceAll("(?i)\\.As\\w+$", "").trim();
+                    if (!varName.isEmpty()) result.append("{").append(varName).append("}");
+                }
+            }
+        }
+        return result.toString();
+    }
+
+    /**
+     * Extrai conteúdo entre parênteses balanceados.
+     * @param src texto fonte
+     * @param openPos posição do '(' de abertura
+     * @return conteúdo entre parênteses (sem os parênteses externos), ou null se não encontrar
+     */
+    private String extractBalancedParens(String src, int openPos) {
+        if (openPos >= src.length() || src.charAt(openPos) != '(') return null;
+        int depth = 0;
+        for (int i = openPos; i < src.length(); i++) {
+            char c = src.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') {
+                depth--;
+                if (depth == 0) {
+                    return src.substring(openPos + 1, i);
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Encontra a posição da primeira vírgula no nível top (depth=0) */
+    private int findTopLevelComma(String args) {
+        int depth = 0;
+        for (int i = 0; i < args.length(); i++) {
+            char c = args.charAt(i);
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (c == ',' && depth == 0) return i;
+        }
+        return -1;
+    }
+
+    private void generateMigrationHints(ButtonStateRule rule) {
+        List<String> hints = rule.getMigrationHints();
+
+        if (rule.getConfirmMessage() != null) {
+            hints.add("Usar ConfirmationService do PrimeNG: this.confirmationService.confirm({ message: '" +
+                       rule.getConfirmMessage() + "', accept: () => { ... } })");
+        }
+
+        if (!rule.getEnableConditions().isEmpty()) {
+            hints.add("Controlar [disabled] no template com base no registro selecionado da grid");
+        }
+
+        if (rule.getRequiresPermission() != null) {
+            hints.add("Verificar permissão '" + rule.getRequiresPermission() + "' via endpoint de parâmetros/perfil");
+        }
+
+        if ("navigation".equals(rule.getActionType())) {
+            hints.add("Usar Router.navigate() ou abrir modal (dialog do PrimeNG)");
+        } else if ("business_method".equals(rule.getActionType())) {
+            hints.add("Chamar endpoint REST correspondente: " + rule.getAction());
+        } else if ("report".equals(rule.getActionType())) {
+            hints.add("Gerar relatório via endpoint de report (download PDF/Excel)");
+        }
+
+        if (rule.getDataset() != null && !rule.getEnableConditions().isEmpty()) {
+            hints.add("No Angular: subscribar ao selecionado$ do Service e recalcular disabled no AfterScroll equivalente");
+        }
+    }
+
     // ── Business Rules ───────────────────────────────────────────────────────
 
     public List<BusinessRule> extractBusinessRules(String src) {
