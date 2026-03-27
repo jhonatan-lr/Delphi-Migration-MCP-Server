@@ -744,8 +744,9 @@ public class JavaCodeGenerator {
             if (ef.manyToOneEntity != null) {
                 sb.append(prefix).append("(:").append(paramName).append(" IS NULL OR p.").append(ef.javaName).append(".id = :").append(paramName).append(")\"");
             } else if (ef.isDate) {
-                // Fix 2: sem CAST — LogusDateTime no @Param, JPA resolve comparação
-                sb.append(prefix).append("(:").append(paramName).append(" IS NULL OR p.").append(ef.javaName).append(" >= :").append(paramName).append(")\"");
+                // Datas como par Inicial/Final
+                sb.append(prefix).append("(:").append(paramName).append("Inicial IS NULL OR p.").append(ef.javaName).append(" >= :").append(paramName).append("Inicial)\"");
+                sb.append("\n        + \"   AND (:").append(paramName).append("Final IS NULL OR p.").append(ef.javaName).append(" <= :").append(paramName).append("Final)\"");
             } else {
                 sb.append(prefix).append("(:").append(paramName).append(" IS NULL OR p.").append(ef.javaName).append(" = :").append(paramName).append(")\"");
             }
@@ -796,12 +797,17 @@ public class JavaCodeGenerator {
         return s.toString();
     }
 
-    /** Adiciona @Param para cada filtro */
+    /** Adiciona @Param para cada filtro. Datas geram par Inicial/Final. */
     private void appendFilterParams(StringBuilder sb, List<EntityField> filterFields) {
         for (EntityField ef : filterFields) {
-            String type = ef.manyToOneEntity != null ? "Integer" : ef.javaType;
-            if (ef.isDate) type = "LogusDateTime";
-            sb.append("        @Param(\"").append(ef.javaName).append("\") ").append(type).append(" ").append(ef.javaName).append(",\n");
+            if (ef.isDate) {
+                sb.append("        @Param(\"").append(ef.javaName).append("Inicial\") LogusDateTime ").append(ef.javaName).append("Inicial,\n");
+                sb.append("        @Param(\"").append(ef.javaName).append("Final\") LogusDateTime ").append(ef.javaName).append("Final,\n");
+            } else {
+                String type = ef.manyToOneEntity != null ? "Integer" : ef.javaType;
+                if (ef.isEnum) type = ef.enumClassName != null ? ef.enumClassName : "Integer";
+                sb.append("        @Param(\"").append(ef.javaName).append("\") ").append(type).append(" ").append(ef.javaName).append(",\n");
+            }
         }
     }
 
@@ -809,8 +815,11 @@ public class JavaCodeGenerator {
     private List<EntityField> resolveFilterFields(List<EntityField> entityFields) {
         List<EntityField> filters = new ArrayList<>();
         for (EntityField ef : entityFields) {
-            // FKs comuns como filtro (filial, status, etc.)
+            // FKs comuns como filtro — excluir self-referencing (detail→master da mesma feature)
             if (ef.manyToOneEntity != null) {
+                // Pular FKs que referenciam a própria entity (cdg_ped_auto → PedautomaticoEntity)
+                if (ef.colName != null && (ef.colName.contains("_ped_") || ef.colName.contains("_item_")
+                        || ef.colName.startsWith("id"))) continue;
                 filters.add(ef);
                 continue;
             }
@@ -819,8 +828,10 @@ public class JavaCodeGenerator {
                 filters.add(ef);
                 continue;
             }
-            // Datas (períodos)
-            if (ef.isDate && ef.colName != null && !ef.colName.contains("cancel") && !ef.colName.contains("ativacao")) {
+            // Datas (períodos) — excluir cancel, ativacao, fechamento (não são filtros típicos)
+            if (ef.isDate && ef.colName != null
+                    && !ef.colName.contains("cancel") && !ef.colName.contains("ativacao")
+                    && !ef.colName.contains("fechamento") && !ef.colName.contains("destina")) {
                 filters.add(ef);
             }
         }
@@ -1143,21 +1154,38 @@ public class JavaCodeGenerator {
         sb.append("public class ").append(pesquisaDtoName).append(" implements Serializable {\n\n");
         sb.append("    private static final long serialVersionUID = 1L;\n\n");
 
-        // Campos de filtro com tipos corretos
+        // Campos de filtro com tipos corretos. Datas geram par Inicial/Final.
         for (EntityField ef : filterFields) {
-            String dtoType = pesquisaFieldType(ef);
-            sb.append("    private ").append(dtoType).append(" ").append(ef.javaName).append(";\n");
+            if (ef.isDate) {
+                sb.append("    private String ").append(ef.javaName).append("Inicial;\n");
+                sb.append("    private String ").append(ef.javaName).append("Final;\n");
+            } else {
+                String dtoType = pesquisaFieldType(ef);
+                sb.append("    private ").append(dtoType).append(" ").append(ef.javaName).append(";\n");
+            }
         }
         sb.append("\n    private LazyLoadDto lazyDto;\n\n");
 
         // Getters & Setters com this.
         for (EntityField ef : filterFields) {
-            String dtoType = pesquisaFieldType(ef);
-            String cap = capitalize(ef.javaName);
-            sb.append("    public ").append(dtoType).append(" get").append(cap).append("() {\n");
-            sb.append("        return this.").append(ef.javaName).append(";\n    }\n\n");
-            sb.append("    public void set").append(cap).append("(").append(dtoType).append(" ").append(ef.javaName).append(") {\n");
-            sb.append("        this.").append(ef.javaName).append(" = ").append(ef.javaName).append(";\n    }\n\n");
+            if (ef.isDate) {
+                // Par Inicial/Final
+                for (String suffix : new String[]{"Inicial", "Final"}) {
+                    String fieldName = ef.javaName + suffix;
+                    String cap = capitalize(fieldName);
+                    sb.append("    public String get").append(cap).append("() {\n");
+                    sb.append("        return this.").append(fieldName).append(";\n    }\n\n");
+                    sb.append("    public void set").append(cap).append("(String ").append(fieldName).append(") {\n");
+                    sb.append("        this.").append(fieldName).append(" = ").append(fieldName).append(";\n    }\n\n");
+                }
+            } else {
+                String dtoType = pesquisaFieldType(ef);
+                String cap = capitalize(ef.javaName);
+                sb.append("    public ").append(dtoType).append(" get").append(cap).append("() {\n");
+                sb.append("        return this.").append(ef.javaName).append(";\n    }\n\n");
+                sb.append("    public void set").append(cap).append("(").append(dtoType).append(" ").append(ef.javaName).append(") {\n");
+                sb.append("        this.").append(ef.javaName).append(" = ").append(ef.javaName).append(";\n    }\n\n");
+            }
         }
 
         sb.append("    public LazyLoadDto getLazyDto() {\n");
