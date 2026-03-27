@@ -19,12 +19,21 @@ public class AngularCodeGenerator {
     /** Tabela principal do banco — usado para fallback de campos via TargetPatterns */
     private String currentTableName;
 
+    /** Contexto de análise com regras extraídas do .pas */
+    private AnalysisContext ctx;
+
     /**
      * Gera todos os arquivos Angular para um modulo baseado em um form Delphi.
      * Retorna Map<nomeArquivo, conteudo>.
      */
     public Map<String, String> generateModule(DfmForm form, DelphiClass dc, String tableName) {
         this.currentTableName = tableName;
+        return generateModule(form, dc);
+    }
+
+    public Map<String, String> generateModule(DfmForm form, DelphiClass dc, String tableName, AnalysisContext ctx) {
+        this.currentTableName = tableName;
+        this.ctx = ctx;
         return generateModule(form, dc);
     }
 
@@ -359,6 +368,7 @@ public class AngularCodeGenerator {
                "  btnNovo(): void {\n" +
                "    this.service.setModoNovo();\n" +
                "  }\n\n" +
+               genColorClassMethod() +
                "  ngOnDestroy(): void {\n" +
                "    this.destroy$.next();\n" +
                "    this.destroy$.complete();\n" +
@@ -405,13 +415,25 @@ public class AngularCodeGenerator {
         String pascal = toPascalCase(name);
         List<FiltroField> filtros = extractFiltroFields(form);
 
+        // Build formControls com defaults e validators do contexto
         StringBuilder formControls = new StringBuilder();
+        Map<String, String> defaultValues = getDefaultValuesForFiltros();
         for (FiltroField f : filtros) {
-            formControls.append("      ").append(f.name).append(": [null],\n");
+            String defaultVal = defaultValues.getOrDefault(f.name, "null");
+            String validator = getValidatorForField(f.name);
+            formControls.append("      ").append(f.name).append(": [").append(defaultVal);
+            if (validator != null) {
+                formControls.append(", [").append(validator).append("]");
+            }
+            formControls.append("],\n");
         }
 
+        // Auto-load no ngOnInit
+        boolean hasAutoLoad = ctx != null && ctx.getFormInitialization().stream()
+                .anyMatch(fi -> !fi.getAutoLoads().isEmpty());
+
         return "import { Component, OnInit } from '@angular/core';\n" +
-               "import { FormBuilder, FormGroup } from '@angular/forms';\n" +
+               "import { FormBuilder, FormGroup, Validators } from '@angular/forms';\n" +
                "import { " + pascal + "Service } from '../../services/" + kebab + ".service';\n" +
                "import { Pesquisa" + pascal + "Model } from '../../models/pesquisa-" + kebab + ".model';\n\n" +
                "@Component({\n" +
@@ -429,7 +451,7 @@ public class AngularCodeGenerator {
                "    });\n" +
                "  }\n\n" +
                "  ngOnInit(): void {\n" +
-               "    this.handlePesquisar();\n" +
+               (hasAutoLoad ? "    this.handlePesquisar();\n" : "    // Pesquisa não é automática nesta tela\n") +
                "  }\n\n" +
                "  handlePesquisar(): void {\n" +
                "    const filtros: Pesquisa" + pascal + "Model = this.form.getRawValue();\n" +
@@ -555,7 +577,12 @@ public class AngularCodeGenerator {
 
         StringBuilder formControls = new StringBuilder();
         for (ResolvedField f : fields) {
-            formControls.append("      ").append(f.camelName).append(": [null],\n");
+            String validator = getValidatorForField(f.camelName);
+            formControls.append("      ").append(f.camelName).append(": [null");
+            if (validator != null) {
+                formControls.append(", [").append(validator).append("]");
+            }
+            formControls.append("],\n");
         }
 
         return "import { Component, OnInit, OnDestroy } from '@angular/core';\n" +
@@ -817,5 +844,97 @@ public class AngularCodeGenerator {
             cols.add(new DfmForm.GridColumn(f.camelName, f.label, "", 10));
         }
         return cols;
+    }
+
+    // ── Helpers para AnalysisContext ─────────────────────────────────────────
+
+    /** Extrai valores default dos filtros via formInitialization */
+    private Map<String, String> getDefaultValuesForFiltros() {
+        Map<String, String> defaults = new LinkedHashMap<>();
+        if (ctx == null) return defaults;
+
+        for (FormInitialization fi : ctx.getFormInitialization()) {
+            for (FormInitialization.DefaultValue dv : fi.getDefaultValues()) {
+                String fieldName = componentToFormControl(dv.getComponent());
+                String value = mapDefaultValue(dv.getValue(), dv.getProperty());
+                defaults.put(fieldName, value);
+            }
+            for (FormInitialization.ComboPreselection cp : fi.getComboPreselections()) {
+                String fieldName = componentToFormControl(cp.getComponent());
+                if (cp.getSelectedKeys() != null && !cp.getSelectedKeys().isEmpty()) {
+                    // Se são números simples, gera array
+                    boolean allNumeric = cp.getSelectedKeys().stream().allMatch(k -> k.matches("\\d+"));
+                    if (allNumeric) {
+                        defaults.put(fieldName, "[" + String.join(", ", cp.getSelectedKeys()) + "]");
+                    }
+                }
+            }
+        }
+        return defaults;
+    }
+
+    /** Mapeia valor Delphi para TypeScript */
+    private String mapDefaultValue(String delphiValue, String property) {
+        if (delphiValue == null) return "null";
+        String lower = delphiValue.toLowerCase();
+        if (lower.contains("conexao.date") || lower.contains("date") || lower.equals("vhoje") ||
+            (property != null && property.equalsIgnoreCase("Date"))) {
+            return "new Date()";
+        }
+        if (lower.equals("true") || lower.equals("false")) return lower;
+        if (lower.matches("\\d+")) return delphiValue;
+        if (lower.equals("''") || lower.equals("emptystr")) return "''";
+        return "null /* " + delphiValue + " */";
+    }
+
+    /** Converte nome de componente Delphi para formControlName Angular */
+    private String componentToFormControl(String component) {
+        if (component == null) return "";
+        // Remove prefixos Delphi: edt, luc, cds, chk, etc
+        String name = component.replaceAll("^(?i)(edt|luc|cds|dts|bbt|lbl|grp|grd|pnl|chk|rdb|cbx)", "");
+        if (name.isEmpty()) return component.toLowerCase();
+        return Character.toLowerCase(name.charAt(0)) + name.substring(1);
+    }
+
+    /** Busca Angular Validator para um campo via fieldValidationRules */
+    private String getValidatorForField(String fieldName) {
+        if (ctx == null) return null;
+        List<String> validators = new ArrayList<>();
+        for (FieldValidationRule fvr : ctx.getFieldValidationRules()) {
+            String fvrField = componentToFormControl(fvr.getField());
+            if (fvrField.equalsIgnoreCase(fieldName)) {
+                if ("required".equals(fvr.getValidationType())) {
+                    if (!validators.contains("Validators.required")) validators.add("Validators.required");
+                } else if ("pattern".equals(fvr.getValidationType()) && "numeric_only".equals(fvr.getValue())) {
+                    validators.add("Validators.pattern('^[0-9]*$')");
+                } else if ("length".equals(fvr.getValidationType())) {
+                    if ("minLength".equals(fvr.getOperator())) {
+                        validators.add("Validators.minLength(" + fvr.getValue() + ")");
+                    } else {
+                        validators.add("Validators.maxLength(" + fvr.getValue() + ")");
+                    }
+                }
+            }
+        }
+        return validators.isEmpty() ? null : String.join(", ", validators);
+    }
+
+    /** Gera método getColorClass() se há calcCellColorRules */
+    private String genColorClassMethod() {
+        if (ctx == null || ctx.getCalcCellColorRules().isEmpty()) return "";
+        CalcCellColorRule colorRule = ctx.getCalcCellColorRules().get(0); // primeiro grid
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("  getColorClass(value: number): string {\n");
+        sb.append("    switch (value) {\n");
+        for (CalcCellColorRule.ColorMapping cm : colorRule.getColorMappings()) {
+            sb.append("      case ").append(cm.getValue()).append(": return '").append(cm.getCssClass()).append("';");
+            if (cm.getLabel() != null) sb.append(" // ").append(cm.getLabel());
+            sb.append("\n");
+        }
+        sb.append("      default: return '';\n");
+        sb.append("    }\n");
+        sb.append("  }\n\n");
+        return sb.toString();
     }
 }

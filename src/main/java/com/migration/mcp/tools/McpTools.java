@@ -833,9 +833,26 @@ class GenerateAngularComponent extends BaseTool {
                     log.info("  PAS parseado: {} classes", unit.getClasses().size());
                 }
 
+                // Extrai AnalysisContext se PAS disponível
+                AnalysisContext analysisCtx = null;
+                if (dc != null) {
+                    String fullPasContent = args.containsKey("pas_content") && !requireString(args, "pas_content").isBlank() && requireString(args, "pas_content").trim().length() >= 10
+                            ? requireString(args, "pas_content")
+                            : (args.containsKey("pas_file_path") ? AnalyzeDelphiUnitTool.readFileWithFallback(Path.of(requireString(args, "pas_file_path"))) : null);
+                    if (fullPasContent != null) {
+                        analysisCtx = new AnalysisContext();
+                        analysisCtx.setFormInitialization(sourceParser.extractFormInitialization(fullPasContent));
+                        analysisCtx.setFieldValidationRules(sourceParser.extractFieldValidationRules(fullPasContent));
+                        analysisCtx.setCalcCellColorRules(sourceParser.extractCalcCellColorRules(fullPasContent));
+                        analysisCtx.setDependentFieldRules(sourceParser.extractDependentFieldRules(fullPasContent));
+                    }
+                }
+
                 // Gera modulo Angular completo
                 log.info("  Gerando módulo Angular...");
-                Map<String, String> generatedFiles = angularGenerator.generateModule(form, dc);
+                Map<String, String> generatedFiles = analysisCtx != null
+                        ? angularGenerator.generateModule(form, dc, null, analysisCtx)
+                        : angularGenerator.generateModule(form, dc);
 
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("formName", form.getFormName());
@@ -1075,6 +1092,17 @@ class GenerateFullModuleTool extends BaseTool {
                     }
                 }
 
+                // ── Extrair AnalysisContext para os geradores ──
+                AnalysisContext analysisCtx = new AnalysisContext();
+                analysisCtx.setFormInitialization(sourceParser.extractFormInitialization(pasContent));
+                analysisCtx.setButtonStateRules(sourceParser.extractButtonStateRules(pasContent));
+                analysisCtx.setFieldValidationRules(sourceParser.extractFieldValidationRules(pasContent));
+                analysisCtx.setCalcCellColorRules(sourceParser.extractCalcCellColorRules(pasContent));
+                analysisCtx.setDependentFieldRules(sourceParser.extractDependentFieldRules(pasContent));
+                analysisCtx.setDatasetEventRules(sourceParser.extractDatasetEventRules(pasContent));
+                analysisCtx.setTransactionBoundaries(sourceParser.extractTransactionBoundaries(pasContent));
+                analysisCtx.setCrossFormDataFlow(sourceParser.extractCrossFormDataFlow(pasContent));
+
                 // ── Java (7 arquivos) ──
                 Map<String, String> javaFiles = new LinkedHashMap<>();
                 for (DelphiClass dc : unit.getClasses()) {
@@ -1084,7 +1112,7 @@ class GenerateFullModuleTool extends BaseTool {
 
                     javaFiles.put(baseName + "Entity.java", javaGenerator.generateEntity(dc, packageName, dfmFields, mainTable, entityClassName));
                     javaFiles.put(baseName + "Repository.java", javaGenerator.generateRepository(dc, packageName, mainTable, dfmFields, entityClassName));
-                    javaFiles.put(baseName + "Service.java", javaGenerator.generateService(dc, packageName, unit.getSqlQueries(), unit.getBusinessRules()));
+                    javaFiles.put(baseName + "Service.java", javaGenerator.generateService(dc, packageName, unit.getSqlQueries(), unit.getBusinessRules(), analysisCtx));
                     javaFiles.put(baseName + "Resource.java", javaGenerator.generateController(dc, packageName));
                     javaFiles.put(baseName + "Dto.java", javaGenerator.generateDto(dc, packageName, dfmFields));
                     javaFiles.put("Pesquisa" + baseName + "Dto.java", javaGenerator.generatePesquisaDto(dc, packageName, dfmFields, mainTable, entityClassName));
@@ -1096,7 +1124,7 @@ class GenerateFullModuleTool extends BaseTool {
                 Map<String, String> angularFiles = new LinkedHashMap<>();
                 if (form != null) {
                     DelphiClass dc = unit.getClasses().isEmpty() ? null : unit.getClasses().get(0);
-                    angularFiles = angularGenerator.generateModule(form, dc, mainTable);
+                    angularFiles = angularGenerator.generateModule(form, dc, mainTable, analysisCtx);
                 }
                 result.put("angularFiles", angularFiles);
 

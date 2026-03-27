@@ -841,7 +841,19 @@ public class JavaCodeGenerator {
     // ── Service ──────────────────────────────────────────────────────────────
 
     public String generateService(DelphiClass dc, String packageName,
+                                   List<SqlQuery> sqlQueries, List<BusinessRule> rules,
+                                   AnalysisContext ctx) {
+        return generateServiceInternal(dc, packageName, sqlQueries, rules, ctx);
+    }
+
+    public String generateService(DelphiClass dc, String packageName,
                                    List<SqlQuery> sqlQueries, List<BusinessRule> rules) {
+        return generateServiceInternal(dc, packageName, sqlQueries, rules, null);
+    }
+
+    private String generateServiceInternal(DelphiClass dc, String packageName,
+                                   List<SqlQuery> sqlQueries, List<BusinessRule> rules,
+                                   AnalysisContext ctx) {
         String baseName = cleanClassNameWithProfile(dc.getName());
         String entityClass = baseName + "Entity";
         String repoName = baseName + "Repository";
@@ -907,9 +919,30 @@ public class JavaCodeGenerator {
         sb.append("                    .orElseThrow(() -> new ValidationException(\"Registro nao encontrado para edicao.\"));\n");
         sb.append("        } else {\n");
         sb.append("            entity = new ").append(entityClass).append("();\n");
+        // AfterInsert defaults do DatasetEventRules
+        if (ctx != null) {
+            for (DatasetEventRule der : ctx.getDatasetEventRules()) {
+                if ("NEW_RECORD_DEFAULTS".equals(der.getEventType()) && !der.getFields().isEmpty()) {
+                    sb.append("            // Defaults de novo registro (Delphi: ").append(der.getSourceMethod()).append(")\n");
+                    for (DatasetEventRule.FieldAssignment fa : der.getFields()) {
+                        sb.append("            // entity.set").append(toPascalCase(snakeToCamel(fa.getField())))
+                          .append("(").append(mapDefaultToJava(fa.getValue())).append(");\n");
+                    }
+                }
+            }
+        }
         sb.append("        }\n");
         sb.append("        // TODO: copiar campos do DTO para a Entity\n");
         sb.append("        this.repository.save(entity);\n");
+        // Transaction operations from transactionBoundaries
+        if (ctx != null) {
+            for (TransactionBoundary tb : ctx.getTransactionBoundaries()) {
+                if (tb.getOperations().size() > 1) {
+                    sb.append("        // Transação original (").append(tb.getMethod()).append("): ")
+                      .append(String.join(" → ", tb.getOperations())).append("\n");
+                }
+            }
+        }
         sb.append("    }\n\n");
 
         // delete
@@ -1451,5 +1484,23 @@ public class JavaCodeGenerator {
         // Garante que começa com minúscula
         if (sb.length() > 0) sb.setCharAt(0, Character.toLowerCase(sb.charAt(0)));
         return sb.toString();
+    }
+
+    private String toPascalCase(String s) {
+        if (s == null || s.isEmpty()) return s;
+        return Character.toUpperCase(s.charAt(0)) + s.substring(1);
+    }
+
+    /** Mapeia valor default Delphi para Java */
+    private String mapDefaultToJava(String delphiValue) {
+        if (delphiValue == null) return "null";
+        String lower = delphiValue.toLowerCase().trim();
+        if (lower.contains("conexao.date") || lower.contains("conexao.now") || lower.equals("now"))
+            return "new Date()";
+        if (lower.equals("true") || lower.equals("false")) return lower;
+        if (lower.matches("\\d+")) return delphiValue;
+        if (lower.contains("parsesituacao") || lower.contains("parse"))
+            return "/* " + delphiValue + " */";
+        return "/* " + delphiValue + " */";
     }
 }
