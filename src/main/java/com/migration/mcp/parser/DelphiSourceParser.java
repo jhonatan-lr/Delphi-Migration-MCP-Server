@@ -893,6 +893,9 @@ public class DelphiSourceParser {
             String component = m.group(1);
             String property = m.group(2);
             String value = m.group(3).trim();
+            // Limpa lixo que pode vazar após o valor (except, end, begin, etc)
+            value = value.replaceAll("(?s)\\s*(?:except|finally|end\\b|begin\\b).*", "").trim();
+            if (value.isEmpty()) continue;
 
             // Ignora variáveis locais e self
             if (component.equalsIgnoreCase("Self") || component.equalsIgnoreCase("Result")) continue;
