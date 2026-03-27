@@ -319,12 +319,21 @@ public class DatabaseLearner {
         tp.setPk(pk.get(0));
       }
       tp.setEntity(inferEntityName(tableName));
+      // Persistir colunas reais do banco
+      List<TargetPatterns.ColumnPattern> columnPatterns = new ArrayList<>();
       for (ColumnInfo ci : cols.values()) {
         if (ci.typeName.equals("SERIAL") || ci.typeName.equals("SERIAL8") || ci.typeName.equals("BIGSERIAL")) {
           tp.setNaturalKey(false);
-          break;
         }
+        TargetPatterns.ColumnPattern cp = new TargetPatterns.ColumnPattern();
+        cp.setName(ci.name);
+        cp.setTypeName(ci.typeName);
+        cp.setJavaType(ci.javaType);
+        cp.setNullable(ci.nullable);
+        cp.setLength(ci.colLength);
+        columnPatterns.add(cp);
       }
+      tp.setColumns(columnPatterns);
       patterns.getKnownTables().put(tableName, tp);
     }
 

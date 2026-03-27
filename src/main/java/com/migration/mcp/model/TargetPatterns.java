@@ -47,10 +47,31 @@ public class TargetPatterns {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class ColumnPattern {
+        private String name;       // nome da coluna (lowercase), ex: "cdg_filial"
+        private String typeName;   // tipo Informix: "INTEGER", "VARCHAR", "DECIMAL"
+        private String javaType;   // tipo Java mapeado: "Integer", "String", "BigDecimal"
+        private boolean nullable;
+        private int length;        // collength do Informix
+
+        public String getName() { return name; }
+        public void setName(String n) { this.name = n; }
+        public String getTypeName() { return typeName; }
+        public void setTypeName(String t) { this.typeName = t; }
+        public String getJavaType() { return javaType; }
+        public void setJavaType(String j) { this.javaType = j; }
+        public boolean isNullable() { return nullable; }
+        public void setNullable(boolean n) { this.nullable = n; }
+        public int getLength() { return length; }
+        public void setLength(int l) { this.length = l; }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class TablePattern {
         private String entity;
         private String pk;
         private boolean naturalKey;
+        private List<ColumnPattern> columns;
 
         public String getEntity() { return entity; }
         public void setEntity(String e) { this.entity = e; }
@@ -58,6 +79,8 @@ public class TargetPatterns {
         public void setPk(String p) { this.pk = p; }
         public boolean isNaturalKey() { return naturalKey; }
         public void setNaturalKey(boolean n) { this.naturalKey = n; }
+        public List<ColumnPattern> getColumns() { return columns; }
+        public void setColumns(List<ColumnPattern> c) { this.columns = c; }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

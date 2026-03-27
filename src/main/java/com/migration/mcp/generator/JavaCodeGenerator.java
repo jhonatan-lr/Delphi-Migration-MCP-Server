@@ -142,7 +142,7 @@ public class JavaCodeGenerator {
         sb.append("  private static final long serialVersionUID = 1L;\n\n");
 
         // ── Resolve fields ──
-        List<EntityField> fields = resolveEntityFields(dc, dfmFields);
+        List<EntityField> fields = resolveEntityFields(dc, dfmFields, tableName);
 
         // ── Detect PK ──
         String pkColumn = detectPkColumn(fields, tableName);
@@ -186,7 +186,9 @@ public class JavaCodeGenerator {
             }
 
             // Campo normal
-            sb.append("  @Column(name = \"").append(f.colName).append("\")\n");
+            sb.append("  @Column(name = \"").append(f.colName).append("\"");
+            if (!f.nullable) sb.append(", nullable = false");
+            sb.append(")\n");
             sb.append("  private ").append(f.javaType).append(" ").append(f.javaName).append(";\n\n");
         }
 
@@ -226,6 +228,7 @@ public class JavaCodeGenerator {
         String converterClassName; // ex: SituacaoPedidoAutomaticoConverter
         String manyToOneEntity;   // ex: "FilialEntity" se é FK, null se campo simples
         int priority;             // flg_=10, cdg_=5, dcr_=1 (para resolver colisões)
+        boolean nullable = true;  // do banco: false → gera @Column(nullable = false)
     }
 
     /** FKs conhecidas do projeto Logus → Entity correspondente */
@@ -240,7 +243,7 @@ public class JavaCodeGenerator {
     }
 
     /** Resolve campos: converte nomes técnicos para descritivos, resolve colisões por prioridade */
-    private List<EntityField> resolveEntityFields(DelphiClass dc, List<DfmForm.DatasetField> dfmFields) {
+    private List<EntityField> resolveEntityFields(DelphiClass dc, List<DfmForm.DatasetField> dfmFields, String tableName) {
         // Coleta todos os campos com prioridade
         Map<String, EntityField> byJavaName = new LinkedHashMap<>();
 
@@ -248,24 +251,187 @@ public class JavaCodeGenerator {
         for (DelphiField f : dc.getFields()) {
             if (f.isComponent()) continue;
             String colName = f.getName().toLowerCase();
-            if (isCampoDeTela(colName)) continue; // Fix 1: filtrar campos de tela
+            if (isCampoDeTela(colName)) continue;
             EntityField ef = mapToEntityField(colName, f.getJavaType());
             if (ef != null && !ef.javaName.equals("id") && !ef.javaName.isEmpty()) {
                 addOrReplace(byJavaName, ef);
             }
         }
 
-        // Fallback: DFM fields
+        // Fallback 1: DFM fields
         if (byJavaName.isEmpty() && dfmFields != null) {
             for (DfmForm.DatasetField df : dfmFields) {
-                if (isCampoDeTela(df.getName())) continue; // Fix 1: filtrar campos de tela
+                if (isCampoDeTela(df.getName())) continue;
                 EntityField ef = mapToEntityField(df.getName(), df.getDelphiType());
                 if (ef != null && !ef.javaName.equals("id") && !ef.javaName.isEmpty()) {
                     addOrReplace(byJavaName, ef);
                 }
             }
         }
+
+        // Fallback 2: Colunas reais do banco (via TargetPatterns)
+        if (byJavaName.isEmpty()) {
+            TargetPatterns tp = patterns();
+            if (tp != null && tableName != null) {
+                TargetPatterns.TablePattern table = tp.getKnownTables().get(tableName);
+                if (table != null && table.getColumns() != null) {
+                    for (TargetPatterns.ColumnPattern col : table.getColumns()) {
+                        EntityField ef = mapToEntityFieldFromDb(col);
+                        if (ef != null && !ef.javaName.equals("id") && !ef.javaName.isEmpty()) {
+                            addOrReplace(byJavaName, ef);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Filtro: remover campos fantasma do DFM que não existem no banco real
+        if (!byJavaName.isEmpty()) {
+            TargetPatterns tp = patterns();
+            if (tp != null && tableName != null) {
+                TargetPatterns.TablePattern table = tp.getKnownTables().get(tableName);
+                if (table != null && table.getColumns() != null) {
+                    Set<String> realCols = new HashSet<>();
+                    for (TargetPatterns.ColumnPattern c : table.getColumns()) {
+                        realCols.add(c.getName());
+                    }
+                    byJavaName.values().removeIf(ef ->
+                        ef.colName != null && !realCols.contains(ef.colName));
+                }
+            }
+        }
+
+        // Fix 3: Se filtro removeu tudo (entity ficou só com @Id), usar colunas do banco
+        if (byJavaName.isEmpty()) {
+            TargetPatterns tp = patterns();
+            if (tp != null && tableName != null) {
+                TargetPatterns.TablePattern table = tp.getKnownTables().get(tableName);
+                if (table != null && table.getColumns() != null) {
+                    for (TargetPatterns.ColumnPattern col : table.getColumns()) {
+                        EntityField ef = mapToEntityFieldFromDb(col);
+                        if (ef != null && !ef.javaName.equals("id") && !ef.javaName.isEmpty()) {
+                            addOrReplace(byJavaName, ef);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Enriquecimento: corrigir tipos com dados reais do banco
+        enrichWithDbMetadata(byJavaName, tableName);
+
         return new ArrayList<>(byJavaName.values());
+    }
+
+    /** Resolve campos sem tableName (backward compat) */
+    private List<EntityField> resolveEntityFields(DelphiClass dc, List<DfmForm.DatasetField> dfmFields) {
+        return resolveEntityFields(dc, dfmFields, null);
+    }
+
+    /** Cria EntityField a partir de coluna real do banco (sem heurísticas — tipo é ground truth) */
+    private EntityField mapToEntityFieldFromDb(TargetPatterns.ColumnPattern col) {
+        if (col.getName() == null || col.getName().isBlank()) return null;
+        String colName = col.getName();
+
+        EntityField ef = new EntityField();
+        ef.colName = colName;
+        ef.javaName = toDescriptiveJavaName(colName);
+        ef.javaType = col.getJavaType(); // tipo real do BD
+        ef.nullable = col.isNullable();
+
+        TargetPatterns tp = patterns();
+
+        // String FKs
+        if (tp != null && tp.getStringForeignKeys().contains(colName)) {
+            ef.javaType = "String";
+            ef.priority = 5;
+            return ef;
+        }
+
+        // @ManyToOne: prioridade KNOWN_FK_ENTITIES (curados) > knownForeignKeys (banco) > heurística
+        if (colName.startsWith("cdg_")) {
+            String fkEntity = null;
+            if (KNOWN_FK_ENTITIES.containsKey(colName)) {
+                fkEntity = KNOWN_FK_ENTITIES.get(colName);
+            } else if (tp != null && tp.getKnownForeignKeys().containsKey(colName)) {
+                fkEntity = tp.getKnownForeignKeys().get(colName);
+            }
+            if (fkEntity != null) {
+                ef.manyToOneEntity = fkEntity;
+                ef.javaName = colName.replace("cdg_", "").replace("_", "");
+                ef.priority = 5;
+                return ef;
+            }
+        }
+
+        // Enum
+        if (tp != null && tp.getKnownEnums().containsKey(colName)) {
+            TargetPatterns.EnumPattern ep = tp.getKnownEnums().get(colName);
+            ef.isEnum = true;
+            ef.enumClassName = ep.getEnumClass();
+            ef.converterClassName = ep.getConverterClass();
+            ef.javaType = ep.getEnumClass();
+            ef.priority = 10;
+            return ef;
+        }
+
+        // flb_ → Boolean (padrão Logus: CHAR(1) no banco com BooleanConverter)
+        if (colName.startsWith("flb_")) {
+            ef.javaType = "Boolean";
+            ef.priority = 10;
+            return ef;
+        }
+
+        // flg_ → enum inferido
+        if (colName.startsWith("flg_")) {
+            ef.isEnum = true;
+            String enumSuffix = snakeToCamel(colName.substring(4));
+            ef.enumClassName = capitalize(enumSuffix) + "Enum";
+            ef.javaType = ef.enumClassName;
+            ef.priority = 10;
+            return ef;
+        }
+
+        // Datas
+        if ("LogusDateTime".equals(col.getJavaType())) {
+            ef.isDate = true;
+        }
+
+        // Prioridade para resolver colisões
+        if (colName.startsWith("flb_")) ef.priority = 10;
+        else if (colName.startsWith("cdg_") || colName.startsWith("nmr_") || colName.startsWith("dat_")) ef.priority = 5;
+        else if (colName.startsWith("dcr_")) ef.priority = 1;
+        else ef.priority = 3;
+
+        return ef;
+    }
+
+    /** Enriquece campos existentes com tipos reais do banco (corrige heurísticas erradas) */
+    private void enrichWithDbMetadata(Map<String, EntityField> byJavaName, String tableName) {
+        TargetPatterns tp = patterns();
+        if (tp == null || tableName == null) return;
+        TargetPatterns.TablePattern table = tp.getKnownTables().get(tableName);
+        if (table == null || table.getColumns() == null) return;
+
+        Map<String, TargetPatterns.ColumnPattern> dbCols = new HashMap<>();
+        for (TargetPatterns.ColumnPattern c : table.getColumns()) {
+            dbCols.put(c.getName(), c);
+        }
+        for (EntityField ef : byJavaName.values()) {
+            TargetPatterns.ColumnPattern dbCol = dbCols.get(ef.colName);
+            if (dbCol != null && !ef.isEnum && ef.manyToOneEntity == null) {
+                // flb_ é Boolean no projeto (BooleanConverter), banco diz CHAR(1) — não sobrescrever
+                if (ef.colName != null && ef.colName.startsWith("flb_")) {
+                    ef.javaType = "Boolean";
+                } else {
+                    ef.javaType = dbCol.getJavaType();
+                }
+                ef.nullable = dbCol.isNullable();
+                if ("LogusDateTime".equals(dbCol.getJavaType())) {
+                    ef.isDate = true;
+                }
+            }
+        }
     }
 
     /** Adiciona campo ou substitui se o novo tem prioridade maior (flg_ > dcr_) */
@@ -316,12 +482,13 @@ public class JavaCodeGenerator {
         }
 
         // @ManyToOne: somente para campos cdg_* (códigos são FKs, nmr_ não)
+        // Prioridade: KNOWN_FK_ENTITIES (curados do projeto) > knownForeignKeys (podem ter nomes do banco)
         String fkEntity = null;
         if (colName.startsWith("cdg_")) {
-            if (tp != null && tp.getKnownForeignKeys().containsKey(colName)) {
-                fkEntity = tp.getKnownForeignKeys().get(colName);
-            } else if (KNOWN_FK_ENTITIES.containsKey(colName)) {
+            if (KNOWN_FK_ENTITIES.containsKey(colName)) {
                 fkEntity = KNOWN_FK_ENTITIES.get(colName);
+            } else if (tp != null && tp.getKnownForeignKeys().containsKey(colName)) {
+                fkEntity = tp.getKnownForeignKeys().get(colName);
             }
         }
         if (fkEntity != null) {

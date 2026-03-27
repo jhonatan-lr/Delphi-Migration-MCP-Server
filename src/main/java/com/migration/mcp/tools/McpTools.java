@@ -895,20 +895,21 @@ class GenerateFullModuleTool extends BaseTool {
 
                 Map<String, Object> result = new LinkedHashMap<>();
 
+                // Extrai tabela principal da SQL (usada por Java e Angular)
+                String mainTable = null;
+                for (SqlQuery sq : unit.getSqlQueries()) {
+                    if ("SELECT".equals(sq.getQueryType()) && sq.getTablesUsed() != null && !sq.getTablesUsed().isEmpty()) {
+                        mainTable = sq.getTablesUsed().get(0).toLowerCase();
+                        break;
+                    }
+                }
+
                 // ── Java (7 arquivos) ──
                 Map<String, String> javaFiles = new LinkedHashMap<>();
                 for (DelphiClass dc : unit.getClasses()) {
                     String baseName = dc.getName().replaceAll("^T", "").replaceAll("^(?i)(frm|Frm)", "");
                     if (baseName.isEmpty()) baseName = dc.getName().replaceAll("^T", "");
 
-                    // Extrai tabela principal da SQL
-                    String mainTable = null;
-                    for (SqlQuery sq : unit.getSqlQueries()) {
-                        if ("SELECT".equals(sq.getQueryType()) && sq.getTablesUsed() != null && !sq.getTablesUsed().isEmpty()) {
-                            mainTable = sq.getTablesUsed().get(0).toLowerCase();
-                            break;
-                        }
-                    }
                     javaFiles.put(baseName + "Entity.java", javaGenerator.generateEntity(dc, packageName, dfmFields, mainTable));
                     javaFiles.put(baseName + "Repository.java", javaGenerator.generateRepository(dc, packageName));
                     javaFiles.put(baseName + "Service.java", javaGenerator.generateService(dc, packageName, unit.getSqlQueries(), unit.getBusinessRules()));
@@ -923,7 +924,7 @@ class GenerateFullModuleTool extends BaseTool {
                 Map<String, String> angularFiles = new LinkedHashMap<>();
                 if (form != null) {
                     DelphiClass dc = unit.getClasses().isEmpty() ? null : unit.getClasses().get(0);
-                    angularFiles = angularGenerator.generateModule(form, dc);
+                    angularFiles = angularGenerator.generateModule(form, dc, mainTable);
                 }
                 result.put("angularFiles", angularFiles);
 
@@ -1026,12 +1027,15 @@ class LearnDatabaseTool extends BaseTool {
                 // Merge com patterns existentes (preserva columnNameExpansions e knownEnums manuais)
                 TargetPatterns existing = store.getPatterns();
                 if (existing != null) {
-                    // Preserva expansões manuais
+                    // Preserva expansões manuais (curadas sobrescrevem inferidas)
                     patterns.getColumnNameExpansions().putAll(existing.getColumnNameExpansions());
                     // Preserva enums manuais (banco não tem essa info)
                     patterns.getKnownEnums().putAll(existing.getKnownEnums());
                     // Preserva stringForeignKeys manuais
                     patterns.setStringForeignKeys(existing.getStringForeignKeys());
+                    // FKs curadas (do JSON existente) sobrescrevem as inferidas pelo banco
+                    // Banco infere nomes genéricos (CadfilEntity), JSON tem nomes reais (FilialEntity)
+                    patterns.getKnownForeignKeys().putAll(existing.getKnownForeignKeys());
                 }
 
                 // Salva em disco

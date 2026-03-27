@@ -16,10 +16,18 @@ import java.util.stream.Collectors;
  */
 public class AngularCodeGenerator {
 
+    /** Tabela principal do banco — usado para fallback de campos via TargetPatterns */
+    private String currentTableName;
+
     /**
      * Gera todos os arquivos Angular para um modulo baseado em um form Delphi.
      * Retorna Map<nomeArquivo, conteudo>.
      */
+    public Map<String, String> generateModule(DfmForm form, DelphiClass dc, String tableName) {
+        this.currentTableName = tableName;
+        return generateModule(form, dc);
+    }
+
     public Map<String, String> generateModule(DfmForm form, DelphiClass dc) {
         Map<String, String> files = new LinkedHashMap<>();
         String baseName = sanitizeName(form.getFormName());
@@ -744,25 +752,58 @@ public class AngularCodeGenerator {
             }
         }
 
-        // Fallback: DFM datasetFields
+        // Fallback 1: DFM datasetFields
         if (fields.isEmpty() && form != null && form.getDatasetFields() != null) {
             for (DfmForm.DatasetField df : form.getDatasetFields()) {
                 String name = snakeToCamel(df.getName());
                 if (!name.isEmpty() && !name.equals("id") && seen.add(name)) {
-                    String label = df.getName().replaceAll("^(cdg_|dcr_|nmr_|dat_|flg_|flb_|qtd_|val_)", "")
-                                              .replace("_", " ");
-                    // Capitaliza cada palavra
-                    String[] words = label.split(" ");
-                    StringBuilder lb = new StringBuilder();
-                    for (String w : words) {
-                        if (!w.isEmpty()) lb.append(lb.length() > 0 ? " " : "")
-                                           .append(Character.toUpperCase(w.charAt(0))).append(w.substring(1));
-                    }
-                    fields.add(new ResolvedField(name, lb.toString(), df.getTsType(), df.getJavaType()));
+                    fields.add(new ResolvedField(name, buildLabel(df.getName()), df.getTsType(), df.getJavaType()));
                 }
             }
         }
+
+        // Fallback 2: Colunas reais do banco (via TargetPatterns)
+        if (fields.isEmpty() && currentTableName != null) {
+            TargetPatterns tp = ProjectProfileStore.getInstance().getPatterns();
+            if (tp != null) {
+                TargetPatterns.TablePattern table = tp.getKnownTables().get(currentTableName);
+                if (table != null && table.getColumns() != null) {
+                    for (TargetPatterns.ColumnPattern col : table.getColumns()) {
+                        String name = snakeToCamel(col.getName());
+                        if (!name.isEmpty() && !name.equals("id") && seen.add(name)) {
+                            String tsType = mapJavaTypeToTs(col.getJavaType());
+                            fields.add(new ResolvedField(name, buildLabel(col.getName()), tsType, col.getJavaType()));
+                        }
+                    }
+                }
+            }
+        }
+
         return fields;
+    }
+
+    /** Converte tipo Java → TypeScript */
+    private String mapJavaTypeToTs(String javaType) {
+        if (javaType == null) return "string";
+        return switch (javaType) {
+            case "Integer", "Long", "BigDecimal", "Double" -> "number";
+            case "Boolean" -> "boolean";
+            case "LogusDateTime" -> "Date";
+            default -> "string";
+        };
+    }
+
+    /** Gera label a partir do nome de coluna do banco */
+    private String buildLabel(String colName) {
+        String label = colName.replaceAll("^(cdg_|dcr_|nmr_|dat_|flg_|flb_|qtd_|val_|pct_|sgl_|hor_)", "")
+                              .replace("_", " ");
+        String[] words = label.split(" ");
+        StringBuilder lb = new StringBuilder();
+        for (String w : words) {
+            if (!w.isEmpty()) lb.append(lb.isEmpty() ? "" : " ")
+                               .append(Character.toUpperCase(w.charAt(0))).append(w.substring(1));
+        }
+        return lb.toString();
     }
 
     /** Resolve colunas do grid: primeiro tenta gridColumns do DFM, senão usa campos */
