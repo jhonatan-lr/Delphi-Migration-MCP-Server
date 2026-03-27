@@ -1813,6 +1813,339 @@ public class DelphiSourceParser {
         };
     }
 
+    // ── Dependent Field Logic (Exit/Change events → field cascades) ────────
+
+    public List<DependentFieldRule> extractDependentFieldRules(String src) {
+        List<DependentFieldRule> rules = new ArrayList<>();
+
+        // Encontra métodos de evento de campo: xxxExit, xxxChange, xxxOnSelect, xxxKeyDown
+        Pattern eventPattern = Pattern.compile(
+                "(?i)procedure\\s+\\w+\\.((\\w+?)(Exit|Change|OnSelect|Enter))\\s*\\([^)]*\\)\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                Pattern.MULTILINE);
+        Matcher mm = eventPattern.matcher(src);
+
+        while (mm.find()) {
+            String methodName = mm.group(1);
+            String fieldName = mm.group(2);
+            String eventType = mm.group(3);
+            String body = mm.group(0);
+            if (body.length() > 8000) body = body.substring(0, 8000);
+
+            // Ignora se é um botão (bbt) - já tratado por ButtonStateRules
+            if (fieldName.toLowerCase().startsWith("bbt")) continue;
+
+            DependentFieldRule rule = new DependentFieldRule();
+            rule.setTriggerField(fieldName);
+            rule.setTriggerEvent(eventType);
+            rule.setSourceMethod(methodName);
+
+            // Detecta efeitos: campo.Text := valor, campo.KeyValue := valor
+            Pattern assignPat = Pattern.compile("(?i)(\\w+)\\.(Text|KeyValue|Caption|Enabled|Visible|Date)\\s*:=\\s*([^;]+);");
+            Matcher am = assignPat.matcher(body);
+            while (am.find()) {
+                String target = am.group(1);
+                String prop = am.group(2);
+                String value = am.group(3).trim()
+                        .replaceAll("(?s)\\s*(?:except|finally|end\\b|begin\\b).*", "").trim();
+                if (target.equalsIgnoreCase(fieldName) || target.equalsIgnoreCase("Self") || target.equalsIgnoreCase("Result")) continue;
+
+                String action = prop.equalsIgnoreCase("Enabled") || prop.equalsIgnoreCase("Visible")
+                        ? (value.equalsIgnoreCase("True") ? "enable" : "disable")
+                        : "fill";
+                rule.getEffects().add(new DependentFieldRule.FieldEffect(target, action, value, null));
+            }
+
+            // Detecta fallback em else: campo.Text := 'VALOR'
+            Matcher elsePat = Pattern.compile("(?i)else\\s*(?:begin)?[\\s\\S]*?(\\w+)\\.Text\\s*:=\\s*'([^']*)'").matcher(body);
+            if (elsePat.find() && !rule.getEffects().isEmpty()) {
+                // Associa fallback ao último efeito de fill
+                for (int i = rule.getEffects().size() - 1; i >= 0; i--) {
+                    if ("fill".equals(rule.getEffects().get(i).getAction())) {
+                        rule.getEffects().get(i).setFallback(elsePat.group(2));
+                        break;
+                    }
+                }
+            }
+
+            // Detecta validação: TLogusMessage.Warning
+            Matcher warnPat = Pattern.compile("(?i)TLogusMessage\\.Warning\\s*\\(\\s*'([^']*)'").matcher(body);
+            if (warnPat.find()) {
+                rule.setValidationMessage(warnPat.group(1));
+            }
+
+            // Gera hint Angular
+            if (!rule.getEffects().isEmpty() || rule.getValidationMessage() != null) {
+                boolean hasLookup = body.toLowerCase().contains("get") || body.toLowerCase().contains("pesquis");
+                rule.setAngularHint(hasLookup
+                        ? "valueChanges no formControl → switchMap para endpoint de busca"
+                        : "valueChanges no formControl → patchValue nos campos dependentes");
+                rules.add(rule);
+            }
+        }
+
+        return rules;
+    }
+
+    // ── Dataset Event Rules (AfterInsert, CalcFields, BeforeDelete, etc) ─
+
+    public List<DatasetEventRule> extractDatasetEventRules(String src) {
+        List<DatasetEventRule> rules = new ArrayList<>();
+
+        // Eventos de dataset: cdsXxxAfterInsert, cdsXxxCalcFields, cdsXxxBeforeDelete, etc
+        String[] events = {"AfterInsert", "BeforeInsert", "AfterPost", "BeforePost",
+                "AfterDelete", "BeforeDelete", "CalcFields", "OnFilterRecord",
+                "BeforeEdit", "AfterEdit", "AfterCancel", "OnNewRecord"};
+
+        for (String event : events) {
+            Pattern pat = Pattern.compile(
+                    "(?i)procedure\\s+\\w+\\.(\\w+)" + event + "\\s*\\([^)]*\\)\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                    Pattern.MULTILINE);
+            Matcher mm = pat.matcher(src);
+
+            while (mm.find()) {
+                String dataset = mm.group(1);
+                String body = mm.group(0);
+                if (body.length() > 10000) body = body.substring(0, 10000);
+
+                DatasetEventRule rule = new DatasetEventRule();
+                rule.setDataset(dataset);
+                rule.setEvent(event);
+                rule.setSourceMethod(dataset + event);
+
+                if (event.equals("AfterInsert") || event.equals("OnNewRecord")) {
+                    rule.setEventType("NEW_RECORD_DEFAULTS");
+                    // Extrai atribuições: FieldByName('campo').AsXxx := valor
+                    Pattern fieldAssign = Pattern.compile(
+                            "(?i)FieldByName\\s*\\(\\s*'([^']+)'\\s*\\)\\.As\\w+\\s*:=\\s*([^;]+);");
+                    Matcher fa = fieldAssign.matcher(body);
+                    while (fa.find()) {
+                        String val = fa.group(2).trim()
+                                .replaceAll("(?s)\\s*(?:except|finally|end\\b|begin\\b).*", "").trim();
+                        rule.getFields().add(new DatasetEventRule.FieldAssignment(fa.group(1), val));
+                    }
+                    rule.setMigration("Setar defaults no Service.preencherEntidade() ou no Entity constructor");
+                } else if (event.equals("CalcFields")) {
+                    rule.setEventType("COMPUTED_FIELD");
+                    // Extrai campos calculados: FieldByName('campo').AsString := expressão
+                    Pattern calcAssign = Pattern.compile(
+                            "(?i)FieldByName\\s*\\(\\s*'([^']+)'\\s*\\)\\.As\\w+\\s*:=\\s*([^;]+);");
+                    Matcher ca = calcAssign.matcher(body);
+                    StringBuilder expr = new StringBuilder();
+                    while (ca.find()) {
+                        rule.getFields().add(new DatasetEventRule.FieldAssignment(ca.group(1), ca.group(2).trim()));
+                        if (expr.length() > 0) expr.append("; ");
+                        expr.append(ca.group(1)).append(" = ").append(ca.group(2).trim());
+                    }
+                    if (expr.length() > 0) rule.setExpression(expr.toString());
+                    rule.setMigration("Getter no Angular ou campo derivado no GridVo (SELECT concatenado)");
+                } else if (event.contains("Delete")) {
+                    rule.setEventType("CASCADE");
+                    rule.setMigration("Cascade delete via @OnDelete ou Service.excluir() com lógica explícita");
+                } else if (event.contains("Before")) {
+                    rule.setEventType("GUARD");
+                    rule.setMigration("Validação no Service antes da operação (pre-condition check)");
+                } else {
+                    rule.setEventType("HOOK");
+                    rule.setMigration("Lógica pós-operação no Service (refresh, recálculo, log)");
+                }
+
+                // Só adiciona se tem conteúdo útil
+                if (!rule.getFields().isEmpty() || rule.getExpression() != null ||
+                    event.contains("Delete") || event.contains("Before") || event.equals("OnFilterRecord")) {
+                    rules.add(rule);
+                }
+            }
+        }
+
+        return rules;
+    }
+
+    // ── Provider Update Rules (BeforeUpdateRecord → sequences + key propagation) ─
+
+    public List<ProviderUpdateRule> extractProviderUpdateRules(String src) {
+        List<ProviderUpdateRule> rules = new ArrayList<>();
+
+        // Encontra métodos BeforeUpdateRecord
+        Pattern pat = Pattern.compile(
+                "(?i)procedure\\s+\\w+\\.(\\w+BeforeUpdateRecord)\\s*\\([^)]*\\)\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                Pattern.MULTILINE);
+        Matcher mm = pat.matcher(src);
+
+        while (mm.find()) {
+            String methodName = mm.group(1);
+            String body = mm.group(0);
+            if (body.length() > 10000) body = body.substring(0, 10000);
+
+            // Provider name: dspPedidoBeforeUpdateRecord → dspPedido
+            String provider = methodName.replaceAll("(?i)BeforeUpdateRecord$", "");
+
+            ProviderUpdateRule rule = new ProviderUpdateRule();
+            rule.setProvider(provider);
+            rule.setSourceMethod(methodName);
+
+            // Sequences: Conexao.Next('tabela', 'campo') ou Conexao.Next('tabela', 'campo', 'filtro')
+            Pattern seqPat = Pattern.compile(
+                    "(?i)Conexao\\.Next\\s*\\(\\s*'([^']+)'\\s*,\\s*'([^']+)'(?:\\s*,\\s*([^)]+))?\\s*\\)");
+            Matcher sm = seqPat.matcher(body);
+            while (sm.find()) {
+                ProviderUpdateRule.SequenceRule seq = new ProviderUpdateRule.SequenceRule();
+                seq.setTable(sm.group(1));
+                seq.setField(sm.group(2));
+                if (sm.group(3) != null) {
+                    seq.setStrategy("Conexao.Next filtered");
+                    seq.setFilter(sm.group(3).trim().replaceAll("^'|'$", ""));
+                } else {
+                    seq.setStrategy("Conexao.Next global");
+                }
+                rule.getSequences().add(seq);
+            }
+
+            // Key propagation: cdsXxx.FieldByName('campo').AsXxx := FVariable ou DeltaDS
+            Pattern propPat = Pattern.compile(
+                    "(?i)(\\w+)\\.FieldByName\\s*\\(\\s*'([^']+)'\\s*\\)\\.As\\w+\\s*:=\\s*(F\\w+|\\w+\\.FieldByName\\s*\\(\\s*'([^']+)'\\s*\\))");
+            Matcher pm = propPat.matcher(body);
+            while (pm.find()) {
+                String targetDs = pm.group(1);
+                String targetField = pm.group(2);
+                // Não é propagação se é o mesmo provider/DeltaDS
+                if (targetDs.equalsIgnoreCase("DeltaDS") || targetDs.equalsIgnoreCase(provider)) continue;
+                ProviderUpdateRule.KeyPropagation kp = new ProviderUpdateRule.KeyPropagation();
+                kp.setTargetDataset(targetDs);
+                kp.setTargetField(targetField);
+                kp.setSourceField(pm.group(4) != null ? pm.group(4) : targetField);
+                rule.getKeyPropagations().add(kp);
+            }
+
+            if (!rule.getSequences().isEmpty() || !rule.getKeyPropagations().isEmpty()) {
+                rule.setMigration("@GeneratedValue no Entity + Service propaga FK nos itens antes de saveAll");
+                rules.add(rule);
+            }
+        }
+
+        return rules;
+    }
+
+    // ── Transaction Boundaries (StartTransaction/Commit/Rollback) ────────
+
+    public List<TransactionBoundary> extractTransactionBoundaries(String src) {
+        List<TransactionBoundary> rules = new ArrayList<>();
+
+        // Encontra blocos StartTransaction...Commit...Rollback dentro de métodos
+        Pattern txPat = Pattern.compile(
+                "(?i)procedure\\s+\\w+\\.(\\w+)\\s*(?:\\([^)]*\\))?\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                Pattern.MULTILINE);
+        Matcher mm = txPat.matcher(src);
+
+        while (mm.find()) {
+            String methodName = mm.group(1);
+            String body = mm.group(0);
+            if (!body.toLowerCase().contains("starttransaction")) continue;
+            if (body.length() > 10000) body = body.substring(0, 10000);
+
+            TransactionBoundary tx = new TransactionBoundary();
+            tx.setMethod(methodName);
+
+            // Extrai operações dentro da transação: ApplyUpdates, ExecSQL, comandos de negócio
+            Pattern opPat = Pattern.compile("(?i)(\\w+\\.(?:ApplyUpdates|ExecSQL|ExecProc|Execute|Cancelar|Reativar|Salvar|Gravar|Excluir|GravarLog)\\s*(?:\\([^)]*\\))?)");
+            Matcher om = opPat.matcher(body);
+            while (om.find()) {
+                tx.getOperations().add(om.group(1).trim());
+            }
+
+            // Detecta rollback explícito
+            tx.setHasExplicitRollback(body.toLowerCase().contains("rollback"));
+
+            // Detecta exception type no except
+            Matcher excM = Pattern.compile("(?i)except\\s*(?:on\\s+(\\w+)\\s*:\\s*(\\w+))?").matcher(body);
+            if (excM.find() && excM.group(2) != null) {
+                tx.setRollbackOn(excM.group(2));
+            } else {
+                tx.setRollbackOn("Exception");
+            }
+
+            if (!tx.getOperations().isEmpty()) {
+                tx.setMigration("@Transactional no Service — todas as operações na mesma transação JPA");
+                rules.add(tx);
+            }
+        }
+
+        return rules;
+    }
+
+    // ── Cross-Form Data Flow (params in, return, callback) ──────────────
+
+    public List<CrossFormDataFlow> extractCrossFormDataFlow(String src) {
+        List<CrossFormDataFlow> rules = new ArrayList<>();
+
+        // Encontra todos os métodos da classe
+        Pattern methodPat = Pattern.compile(
+                "(?i)procedure\\s+\\w+\\.(\\w+)\\s*(?:\\([^)]*\\))?\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                Pattern.MULTILINE);
+        Matcher mm = methodPat.matcher(src);
+
+        while (mm.find()) {
+            String methodName = mm.group(1);
+            String body = mm.group(0);
+            if (body.length() > 10000) body = body.substring(0, 10000);
+
+            // Encontra chamadas: TfrmXxx.MakeShowModal(...) ou TfrmXxx.ShowModal
+            Pattern callPat = Pattern.compile(
+                    "(?i)(T\\w+)\\.(MakeShowModal|ShowModal|Show)\\s*(?:\\(([^)]*(?:\\([^)]*\\)[^)]*)*)\\))?");
+            Matcher cm = callPat.matcher(body);
+
+            while (cm.find()) {
+                String targetForm = cm.group(1);
+                String callMethod = cm.group(2);
+                String rawParams = cm.group(3);
+
+                CrossFormDataFlow flow = new CrossFormDataFlow();
+                flow.setTargetForm(targetForm);
+                flow.setMethod(callMethod);
+                flow.setSourceMethod(methodName);
+
+                // Extrai parâmetros
+                if (rawParams != null && !rawParams.isBlank()) {
+                    String[] params = rawParams.split(",(?![^(]*\\))"); // split por vírgula top-level
+                    for (String param : params) {
+                        String p = param.trim();
+                        CrossFormDataFlow.FormParam fp = new CrossFormDataFlow.FormParam();
+                        fp.setValue(p);
+                        // Extrai field name se FieldByName
+                        Matcher fbm = Pattern.compile("(?i)FieldByName\\s*\\(\\s*'([^']+)'\\s*\\)").matcher(p);
+                        if (fbm.find()) fp.setField(fbm.group(1));
+                        // Extrai tipo: AsInteger, AsString, etc
+                        Matcher typM = Pattern.compile("(?i)\\.As(Integer|String|Float|DateTime|Boolean)").matcher(p);
+                        if (typM.find()) fp.setType(typM.group(1));
+                        flow.getParamsIn().add(fp);
+                    }
+                }
+
+                // Detecta retorno: if (chamada = mrOk) then ... ação
+                // Olha o contexto ao redor da chamada
+                int callEnd = cm.end();
+                String afterCall = body.substring(callEnd, Math.min(callEnd + 500, body.length()));
+                if (afterCall.trim().startsWith("=") || afterCall.contains("mrOk") || afterCall.contains("mrCancel")) {
+                    Matcher retM = Pattern.compile("(?i)=\\s*(mr\\w+)").matcher(afterCall);
+                    if (retM.find()) flow.setExpectedReturn(retM.group(1));
+
+                    // Ação pós-retorno: then begin ... chamada
+                    Matcher postM = Pattern.compile("(?i)then\\s*(?:begin)?\\s*(\\w+(?:\\.\\w+)?(?:\\s*\\([^)]*\\))?)").matcher(afterCall);
+                    if (postM.find()) {
+                        String action = postM.group(1).trim();
+                        if (!action.equalsIgnoreCase("begin")) flow.setOnSuccessAction(action);
+                    }
+                }
+
+                flow.setMigration(callMethod.contains("Modal")
+                        ? "Dialog PrimeNG com callback onClose ou Router.navigate com queryParams"
+                        : "Router.navigate para tela destino");
+                rules.add(flow);
+            }
+        }
+
+        return rules;
+    }
+
     // ── Business Rules ───────────────────────────────────────────────────────
 
     public List<BusinessRule> extractBusinessRules(String src) {

@@ -163,8 +163,10 @@ class ExtractBusinessRules extends BaseTool {
                 "de tela (FormShow/FormCreate): valores default, pré-seleções de combos, auto-loads e " +
                 "estados iniciais de componentes. Detecta regras de estado de botões (AfterScroll + Click): " +
                 "condições de habilitação, confirmações, ações executadas e permissões. " +
-                "Extrai validações por campo (ValidacaoOk → Validators Angular) e " +
-                "colorização de grids (CalcCellColors → [ngClass]). " +
+                "Extrai validações por campo (ValidacaoOk → Validators Angular), " +
+                "colorização de grids (CalcCellColors → [ngClass]), dependências entre campos " +
+                "(Exit/Change), eventos de dataset (AfterInsert/CalcFields), sequences (BeforeUpdateRecord), " +
+                "transações (StartTransaction/Commit) e fluxo entre telas (MakeShowModal com params). " +
                 "Para cada regra, fornece estratégia de migração e código Java/Angular sugerido.",
                 buildInputSchema(
                         "content", "string", "Conteúdo do código Delphi (.pas)",
@@ -209,6 +211,41 @@ class ExtractBusinessRules extends BaseTool {
                 if (!colorRules.isEmpty()) {
                     result.put("calcCellColorRulesTotal", colorRules.size());
                     result.put("calcCellColorRules", colorRules);
+                }
+
+                // Dependent field logic (Exit/Change → field cascades)
+                List<DependentFieldRule> depFields = parser.extractDependentFieldRules(content);
+                if (!depFields.isEmpty()) {
+                    result.put("dependentFieldRulesTotal", depFields.size());
+                    result.put("dependentFieldRules", depFields);
+                }
+
+                // Dataset event rules (AfterInsert, CalcFields, etc)
+                List<DatasetEventRule> dsEvents = parser.extractDatasetEventRules(content);
+                if (!dsEvents.isEmpty()) {
+                    result.put("datasetEventRulesTotal", dsEvents.size());
+                    result.put("datasetEventRules", dsEvents);
+                }
+
+                // Provider update rules (BeforeUpdateRecord → sequences + key propagation)
+                List<ProviderUpdateRule> provRules = parser.extractProviderUpdateRules(content);
+                if (!provRules.isEmpty()) {
+                    result.put("providerUpdateRulesTotal", provRules.size());
+                    result.put("providerUpdateRules", provRules);
+                }
+
+                // Transaction boundaries (StartTransaction/Commit/Rollback)
+                List<TransactionBoundary> txBounds = parser.extractTransactionBoundaries(content);
+                if (!txBounds.isEmpty()) {
+                    result.put("transactionBoundariesTotal", txBounds.size());
+                    result.put("transactionBoundaries", txBounds);
+                }
+
+                // Cross-form data flow (params in, return, callback)
+                List<CrossFormDataFlow> crossFlows = parser.extractCrossFormDataFlow(content);
+                if (!crossFlows.isEmpty()) {
+                    result.put("crossFormDataFlowTotal", crossFlows.size());
+                    result.put("crossFormDataFlow", crossFlows);
                 }
 
                 return success(result);
@@ -1420,7 +1457,7 @@ o MCP lê automaticamente do `file_path`.
 
 ## extract_business_rules — 5 seções de output
 
-A tool `extract_business_rules` retorna 5 seções complementares numa única chamada:
+A tool `extract_business_rules` retorna até 10 seções complementares numa única chamada:
 
 ### 1. rules — Validações e cálculos
 - Validações com `TLogusMessage.Warning`, `raise Exception`, `ShowMessage`
@@ -1460,6 +1497,36 @@ Extrai lógica de cores de células do `CalcCellColors`:
 - **colorMappings**: valor → cor CSS (ex: 1=green, 2=blue, 3=yellow, 4=orange)
 - **label**: texto da legenda associado à cor (detectado por labels lblVerde, lblAzul)
 - **angularCode**: método `getColorClass()` pronto para usar com `[ngClass]` no PrimeNG
+
+### 6. dependentFieldRules — Cascata entre campos (Exit/Change events)
+Detecta quando mudar um campo afeta outros (preencher, limpar, habilitar):
+- **triggerField/event**: campo e evento que dispara (ex: `edtCodigoFornecedor` / `Exit`)
+- **effects**: lista de campos afetados com ação (fill, disable) e source/fallback
+- **validationMessage**: mensagem de erro se o valor é inválido
+- Mapeia para `valueChanges.pipe(switchMap(...))` ou `(blur)` no Angular
+
+### 7. datasetEventRules — Eventos de dataset (AfterInsert, CalcFields, etc)
+- **AfterInsert/OnNewRecord** → defaults de novo registro (`Service.preencherEntidade()`)
+- **CalcFields** → campos calculados (getter no Angular ou campo derivado no GridVo)
+- **BeforeDelete** → guard / cascade delete
+- **AfterPost** → hooks pós-operação
+
+### 8. providerUpdateRules — Sequences e propagação de chaves (BeforeUpdateRecord)
+- **sequences**: `Conexao.Next('tabela', 'campo')` → `@GeneratedValue` no Entity
+- **keyPropagation**: FK master→detail propagada antes do save
+- Mapeia para `@GeneratedValue` + `Service.salvar()` propaga FK nos itens
+
+### 9. transactionBoundaries — Fronteiras de transação
+- **method**: método com `StartTransaction/Commit/Rollback`
+- **operations**: lista de operações dentro da transação (ApplyUpdates, ExecSQL, GravarLog)
+- Mapeia para `@Transactional` no Spring Service
+
+### 10. crossFormDataFlow — Fluxo de dados entre telas
+- **targetForm/method**: qual tela é chamada e como (MakeShowModal, ShowModal)
+- **paramsIn**: parâmetros passados com campo e tipo extraídos
+- **expectedReturn**: retorno esperado (mrOk, mrCancel)
+- **onSuccessAction**: ação executada após retorno bem-sucedido
+- Mapeia para Router.navigate com queryParams ou Dialog PrimeNG com callback
 
 Exemplo de uso:
 ```
