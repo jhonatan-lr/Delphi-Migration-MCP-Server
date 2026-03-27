@@ -1570,9 +1570,21 @@ todas as 10 seções do `extract_business_rules` e usam para enriquecer o códig
 | Seção usada | Onde aplica | Resultado |
 |---|---|---|
 | `fieldValidationRules` | Filtros + Cadastro `buildFormGroup()` | `Validators.required`, `Validators.pattern`, `minLength`/`maxLength` |
-| `formInitialization` | Filtros `buildFormGroup()` defaults | `dataEmissaoDe: [new Date()]`, combos com `[1, 2]` |
-| `formInitialization` | Filtros `ngOnInit()` | `handlePesquisar()` só se houver autoLoad no FormShow |
-| `calcCellColorRules` | Grid component | Método `getColorClass(value)` com switch/case pronto |
+| `formInitialization` | Filtros `buildFormGroup()` defaults | `new Date()`, `Date - 30`, combos `[1, 2]` |
+| `formInitialization` | Filtros lifecycle | `ngAfterViewInit` com `setTimeout` se houver autoLoad |
+| `calcCellColorRules` | Grid component | `getColorClass(value)` + legenda com emojis no HTML |
+| `columnNameExpansions` | Todos os campos | `cdg_ped_auto` → `codigoPedidoAutomatico` (nomes humanizados) |
+
+### Angular — melhorias no template gerado
+| Aspecto | Antes | Agora |
+|---|---|---|
+| CSS | `class="form-control"` | `class="uppercase"`, `logus-row`, `border-bottom` |
+| Botões | `<app-button label="Salvar">` | `<app-button ngTypeButton="salvar">` |
+| Filtros | `<p-dropdown>` genérico | `<app-dropdown-multiselect>`, `<app-calendar-basico>` |
+| Labels | nome da variável | Caption do DFM ou humanizado (`Código Fornecedor`) |
+| Grid colunas | sem width | `width: '12%'` proporcional ao widthChars do DFM |
+| Grid legenda | nada | Emojis de cor quando há `calcCellColorRules` |
+| Campos obrigatórios | nenhum | `<span class="ask-obrigatorio">*</span>` + `<app-validation-message>` |
 
 ### Java — o que muda com o contexto
 | Seção usada | Onde aplica | Resultado |
