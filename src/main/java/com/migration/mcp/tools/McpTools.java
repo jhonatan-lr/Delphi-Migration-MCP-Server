@@ -1379,7 +1379,7 @@ generate_migration_plan(
 | `analyze_delphi_unit` | .pas (file_path) | Classes, métodos, SQL, regras, dependências (calledForms) |
 | `analyze_dfm_form` | .dfm (file_path) | Componentes mapeados PrimeNG, gridColumns, datasetFields |
 | `extract_sql_queries` | .pas (file_path) | SQLs completas com JPQL sugerido e @Param tipados |
-| `extract_business_rules` | .pas (file_path) | Validações e cálculos com código Java sugerido |
+| `extract_business_rules` | .pas (file_path) | Validações, inicialização de tela (FormShow) e máquina de estados dos botões (AfterScroll + Click) |
 | `analyze_delphi_project` | diretório | Inventário completo (todos .pas + .dfm) |
 | `detect_inconsistencies` | .pas ou .dfm | Desvios do padrão do projeto (nomenclatura, SQL, componentes) |
 
@@ -1401,6 +1401,38 @@ para identificar contexto de classes, métodos e componentes. Fragmentos isolado
 (ex: só o corpo de um FormShow sem a declaração da unit/class) serão ignorados ou terão \
 resultados incompletos. O `content` é opcional — se omitido ou menor que 10 caracteres, \
 o MCP lê automaticamente do `file_path`.
+
+## extract_business_rules — 3 seções de output
+
+A tool `extract_business_rules` retorna 3 seções complementares numa única chamada:
+
+### 1. rules — Validações e cálculos
+- Validações com `TLogusMessage.Warning`, `raise Exception`, `ShowMessage`
+- Cálculos complexos (atribuições numéricas)
+- Cada regra inclui `suggestedJavaCode` e classifica como backend vs frontend
+
+### 2. formInitialization — Lógica de abertura da tela (FormShow/FormCreate)
+- **defaultValues**: campos inicializados com data atual, valores fixos
+- **conditionalDefaults**: campos pré-selecionados e desabilitados condicionalmente
+- **comboPreselections**: itens pré-selecionados em combos multi-select
+- **autoLoads**: chamadas a Carregar*/Load* executadas ao abrir
+- **initialStates**: campos desabilitados/ocultos na inicialização
+
+### 3. buttonStateRules — Máquina de estados dos botões (AfterScroll + Click)
+Combina informações de **quando** o botão está habilitado (AfterScroll) com **o que** \
+ele faz ao ser clicado (Click handler):
+- **enableConditions**: condições do `EnableComponent` no AfterScroll (suporta multi-linha)
+- **confirmMessage**: texto do `TLogusMessage.Confirm` com template `{campo}` para variáveis
+- **action**: método de negócio chamado (ex: `TPedidoAutomatico.Cancelar`)
+- **actionType**: classificação — `business_method`, `navigation`, `report`, `search`, `crud`
+- **requiresPermission**: referências a `Parametros.X.Y.Z` nas condições
+- **fieldReferences**: campos do dataset usados nas condições (ex: `dat_conf`)
+- **migrationHints**: sugestões concretas para Angular (ConfirmationService, [disabled], Router)
+
+Exemplo de uso:
+```
+extract_business_rules(file_path: "C:\\projeto\\f_MinhaTela.pas")
+```
 
 ## Entity Patterns (entity-patterns.json)
 
