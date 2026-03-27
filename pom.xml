@@ -76,13 +76,11 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Informix JDBC Driver (local jar) -->
+        <!-- Informix JDBC Driver (mesmo do logus-corporativo-api) -->
         <dependency>
             <groupId>com.ibm.informix</groupId>
-            <artifactId>ifxjdbc</artifactId>
-            <version>4.10.6</version>
-            <scope>system</scope>
-            <systemPath>${project.basedir}/lib/ifxjdbc.jar</systemPath>
+            <artifactId>jdbc</artifactId>
+            <version>4.10.6.20151104</version>
         </dependency>
     </dependencies>
 
