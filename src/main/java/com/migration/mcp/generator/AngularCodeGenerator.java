@@ -323,6 +323,10 @@ public class AngularCodeGenerator {
         List<ResolvedField> fields = resolveFields(dc, form);
         List<DfmForm.GridColumn> gridCols = resolveGridColumns(form, fields);
 
+        // Calcula widths proporcionais
+        int totalChars = gridCols.stream().mapToInt(DfmForm.GridColumn::getWidthChars).sum();
+        if (totalChars <= 0) totalChars = gridCols.size() * 10;
+
         StringBuilder cols = new StringBuilder();
         for (DfmForm.GridColumn gc : gridCols) {
             String field = snakeToCamel(gc.getField());
@@ -330,7 +334,9 @@ public class AngularCodeGenerator {
             if (gc.getSubHeader() != null && !gc.getSubHeader().isEmpty()) {
                 header = gc.getSubHeader() + " " + header;
             }
-            cols.append("    { field: '").append(field).append("', header: '").append(header).append("' },\n");
+            int widthPct = Math.max(5, Math.round((float) gc.getWidthChars() / totalChars * 95));
+            cols.append("    { field: '").append(field).append("', header: '").append(header)
+                .append("', width: '").append(widthPct).append("%' },\n");
         }
 
         return "import { Component, OnInit, OnDestroy } from '@angular/core';\n" +
@@ -377,20 +383,43 @@ public class AngularCodeGenerator {
     }
 
     private String genGridHtml(String kebab) {
-        return "<div class=\"row\">\n" +
-               "  <div class=\"col-12\">\n" +
-               "    <app-button label=\"Novo\" icon=\"fa fa-plus\" (onClick)=\"btnNovo()\"></app-button>\n" +
-               "    <app-botoes-exportar (onExportar)=\"exportarDados()\"></app-botoes-exportar>\n" +
-               "  </div>\n" +
-               "</div>\n\n" +
-               "<app-data-grid\n" +
-               "  [colunas]=\"colunas\"\n" +
-               "  [listaGrid]=\"listaGrid\"\n" +
-               "  [totalRegistros]=\"totalRegistros\"\n" +
-               "  (onLazy)=\"service.loadLazy($event)\"\n" +
-               "  (onEditar)=\"service.setModoEditar($event)\"\n" +
-               "  (onExcluir)=\"service.handleDeletar($event.id)\">\n" +
-               "</app-data-grid>\n";
+        StringBuilder sb = new StringBuilder();
+        sb.append("<div class=\"row logus-row\">\n");
+        sb.append("  <div class=\"col-lg-12\">\n");
+        sb.append("    <app-data-grid\n");
+        sb.append("      [(ngModel)]=\"listaGrid\"\n");
+        sb.append("      [columns]=\"colunas\"\n");
+        sb.append("      [totalRecords]=\"totalRegistros\"\n");
+        sb.append("      (onLazyLoad)=\"loadLazy($event)\">\n");
+        sb.append("    </app-data-grid>\n");
+        sb.append("  </div>\n");
+        sb.append("</div>\n");
+        sb.append("<div class=\"row logus-row border-bottom\">\n");
+        sb.append("  <div class=\"col-xs-12 col-sm-6 col-md-6 col-lg-6\">\n");
+        sb.append("    <app-botoes-exportar (exportarEmitter)=\"exportarGrid($event)\"></app-botoes-exportar>\n");
+        sb.append("  </div>\n");
+        sb.append("  <div class=\"col-xs-12 col-sm-6 col-md-6 col-lg-6\">\n");
+        sb.append("    <app-button ngTypeButton=\"novo\" ngClass=\"float-right\" (onClick)=\"btnNovo()\"></app-button>\n");
+        sb.append("  </div>\n");
+        sb.append("</div>\n");
+
+        // Legenda de cores (se calcCellColorRules disponível)
+        if (ctx != null && !ctx.getCalcCellColorRules().isEmpty()) {
+            CalcCellColorRule colorRule = ctx.getCalcCellColorRules().get(0);
+            if (!colorRule.getColorMappings().isEmpty()) {
+                sb.append("<div class=\"row logus-row\" style=\"margin-top: 2px; font-size: 11px\">\n");
+                sb.append("  <div class=\"ml-3\" style=\"display: flex; align-items: center; gap: 12px\">\n");
+                for (CalcCellColorRule.ColorMapping cm : colorRule.getColorMappings()) {
+                    String emoji = mapColorToEmoji(cm.getColor());
+                    String label = cm.getLabel() != null ? cm.getLabel() : "Valor " + cm.getValue();
+                    sb.append("    <span>").append(emoji).append(" ").append(label).append("</span>\n");
+                }
+                sb.append("  </div>\n");
+                sb.append("</div>\n");
+            }
+        }
+
+        return sb.toString();
     }
 
     private String genGridModule(String name, String kebab) {
@@ -432,30 +461,41 @@ public class AngularCodeGenerator {
         boolean hasAutoLoad = ctx != null && ctx.getFormInitialization().stream()
                 .anyMatch(fi -> !fi.getAutoLoads().isEmpty());
 
-        return "import { Component, OnInit } from '@angular/core';\n" +
+        String lifecycle = hasAutoLoad ? "AfterViewInit" : "OnInit";
+        String lifecycleImpl = hasAutoLoad ? "AfterViewInit" : "OnInit";
+        String lifecycleMethod = hasAutoLoad ? "ngAfterViewInit" : "ngOnInit";
+        String lifecycleImport = hasAutoLoad
+                ? "import { Component, AfterViewInit, ChangeDetectionStrategy } from '@angular/core';\n"
+                : "import { Component, OnInit, ChangeDetectionStrategy } from '@angular/core';\n";
+
+        return lifecycleImport +
                "import { FormBuilder, FormGroup, Validators } from '@angular/forms';\n" +
                "import { " + pascal + "Service } from '../../services/" + kebab + ".service';\n" +
                "import { Pesquisa" + pascal + "Model } from '../../models/pesquisa-" + kebab + ".model';\n\n" +
                "@Component({\n" +
                "  selector: 'app-" + kebab + "-filtros',\n" +
-               "  templateUrl: './" + kebab + "-filtros.component.html'\n" +
+               "  templateUrl: './" + kebab + "-filtros.component.html',\n" +
+               "  changeDetection: ChangeDetectionStrategy.OnPush\n" +
                "})\n" +
-               "export class " + pascal + "FiltrosComponent implements OnInit {\n\n" +
-               "  form: FormGroup;\n\n" +
+               "export class " + pascal + "FiltrosComponent implements " + lifecycleImpl + " {\n\n" +
+               "  formGroup: FormGroup;\n\n" +
                "  constructor(\n" +
-               "    private fb: FormBuilder,\n" +
+               "    private formBuilder: FormBuilder,\n" +
                "    private service: " + pascal + "Service\n" +
                "  ) {\n" +
-               "    this.form = this.fb.group({\n" +
+               "    this.formGroup = this.formBuilder.group({\n" +
                formControls +
                "    });\n" +
                "  }\n\n" +
-               "  ngOnInit(): void {\n" +
-               (hasAutoLoad ? "    this.handlePesquisar();\n" : "    // Pesquisa não é automática nesta tela\n") +
+               "  " + lifecycleMethod + "(): void {\n" +
+               (hasAutoLoad ? "    setTimeout(() => this.btnPesquisar(), 500);\n" : "") +
                "  }\n\n" +
-               "  handlePesquisar(): void {\n" +
-               "    const filtros: Pesquisa" + pascal + "Model = this.form.getRawValue();\n" +
+               "  btnPesquisar(): void {\n" +
+               "    const filtros: Pesquisa" + pascal + "Model = { ...this.formGroup.value };\n" +
                "    this.service.handlePesquisar(filtros);\n" +
+               "  }\n\n" +
+               "  pesquisaEnter(event): void {\n" +
+               "    if (event.keyCode === 13) { this.btnPesquisar(); }\n" +
                "  }\n" +
                "}\n";
     }
@@ -463,31 +503,36 @@ public class AngularCodeGenerator {
     private String genFiltrosHtml(String kebab, DelphiClass dc, DfmForm form) {
         List<FiltroField> filtros = extractFiltroFields(form);
         StringBuilder sb = new StringBuilder();
-        sb.append("<app-filtro (onPesquisar)=\"handlePesquisar()\">\n");
-        sb.append("  <div class=\"row\">\n");
+        sb.append("<div [formGroup]=\"formGroup\">\n");
+        sb.append("  <app-filtro\n");
+        sb.append("    (emmitPesquisar)=\"btnPesquisar()\"\n");
+        sb.append("    (keyup)=\"pesquisaEnter($event)\">\n");
         for (FiltroField f : filtros) {
-            String colSize = f.type.equals("calendar") ? "col-md-2" : f.type.equals("dropdown") ? "col-md-3" : "col-md-3";
-            sb.append("    <div class=\"").append(colSize).append("\">\n");
+            String width = f.type.equals("calendar") ? "10rem" : "17rem";
+            sb.append("    <div class=\"ml-3\" style=\"width: ").append(width).append("\">\n");
             sb.append("      <label>").append(f.label).append("</label>\n");
             switch (f.type) {
                 case "dropdown":
-                    sb.append("      <p-dropdown [options]=\"").append(f.name).append("Options\" formControlName=\"")
-                      .append(f.name).append("\" [filter]=\"true\" [showClear]=\"true\" placeholder=\"Selecione...\"></p-dropdown>\n");
+                    sb.append("      <app-dropdown-multiselect ngType=\"dropdown\" ngConsulta=\"custom\"\n");
+                    sb.append("        ngId=\"").append(f.name).append("\" formControlName=\"").append(f.name).append("\">\n");
+                    sb.append("      </app-dropdown-multiselect>\n");
                     break;
                 case "calendar":
-                    sb.append("      <p-calendar formControlName=\"").append(f.name).append("\" dateFormat=\"dd/mm/yy\" [showIcon]=\"true\"></p-calendar>\n");
+                    sb.append("      <app-calendar-basico ngId=\"").append(f.name).append("\" formControlName=\"").append(f.name).append("\">\n");
+                    sb.append("      </app-calendar-basico>\n");
                     break;
                 case "checkbox":
                     sb.append("      <p-checkbox formControlName=\"").append(f.name).append("\" label=\"").append(f.label).append("\"></p-checkbox>\n");
                     break;
                 default:
-                    sb.append("      <input pInputText formControlName=\"").append(f.name).append("\" class=\"form-control\" />\n");
+                    sb.append("      <input pInputText id=\"").append(f.name).append("\" formControlName=\"")
+                      .append(f.name).append("\" type=\"text\" class=\"uppercase\" />\n");
                     break;
             }
             sb.append("    </div>\n");
         }
-        sb.append("  </div>\n");
-        sb.append("</app-filtro>\n");
+        sb.append("  </app-filtro>\n");
+        sb.append("</div>\n");
         return sb.toString();
     }
 
@@ -546,9 +591,11 @@ public class AngularCodeGenerator {
                 return e.getValue();
             }
         }
-        // Fallback: usa Caption ou nome
-        return comp.getProperties().getOrDefault("Caption",
-               comp.getProperties().getOrDefault("Hint", comp.getName()));
+        // Fallback: humaniza nome do componente (edtCodigoFornecedorDisplay → Código Fornecedor)
+        String caption = comp.getProperties().getOrDefault("Caption",
+               comp.getProperties().getOrDefault("Hint", null));
+        if (caption != null && !caption.equals(comp.getName())) return caption;
+        return humanizeComponentName(comp.getName());
     }
 
     private String genFiltrosModule(String name, String kebab) {
@@ -637,33 +684,40 @@ public class AngularCodeGenerator {
     private String genCadastroHtml(String kebab, DelphiClass dc, DfmForm form) {
         List<ResolvedField> fields = resolveFields(dc, form);
         StringBuilder sb = new StringBuilder();
-        sb.append("<div class=\"container-fluid\">\n");
-        sb.append("  <form [formGroup]=\"form\">\n");
-        sb.append("    <div class=\"row\">\n");
+        sb.append("<div [formGroup]=\"form\">\n");
+        sb.append("  <div class=\"row logus-row\">\n");
 
         for (ResolvedField f : fields) {
-            sb.append("      <div class=\"col-md-4 form-group\">\n");
-            sb.append("        <label>").append(f.label).append("</label>\n");
+            String width = "20rem";
+            boolean isRequired = isFieldRequired(f.camelName);
+            sb.append("    <div class=\"ml-3\" style=\"width: ").append(width).append("\">\n");
+            sb.append("      <label>").append(f.label);
+            if (isRequired) sb.append("<span class=\"ask-obrigatorio\">*</span>");
+            sb.append("</label>\n");
 
             if ("boolean".equals(f.tsType)) {
-                sb.append("        <p-checkbox formControlName=\"").append(f.camelName).append("\" [binary]=\"true\" label=\"").append(f.label).append("\"></p-checkbox>\n");
-            } else if ("BigDecimal".equals(f.javaType)) {
-                sb.append("        <input pInputText formControlName=\"").append(f.camelName).append("\" class=\"form-control\" currencyMask />\n");
-            } else if ("Date".equals(f.javaType)) {
-                sb.append("        <p-calendar formControlName=\"").append(f.camelName).append("\" dateFormat=\"dd/mm/yy\" [showIcon]=\"true\"></p-calendar>\n");
+                sb.append("      <p-checkbox formControlName=\"").append(f.camelName).append("\" [binary]=\"true\" label=\"").append(f.label).append("\"></p-checkbox>\n");
+            } else if ("BigDecimal".equals(f.javaType) || "number".equals(f.tsType)) {
+                sb.append("      <p-inputNumber formControlName=\"").append(f.camelName).append("\" [useGrouping]=\"false\"></p-inputNumber>\n");
+            } else if ("Date".equals(f.javaType) || "LogusDateTime".equals(f.javaType)) {
+                sb.append("      <app-calendar-basico ngId=\"").append(f.camelName).append("\" formControlName=\"").append(f.camelName).append("\"></app-calendar-basico>\n");
             } else {
-                sb.append("        <input pInputText formControlName=\"").append(f.camelName).append("\" class=\"form-control\" />\n");
+                sb.append("      <input pInputText formControlName=\"").append(f.camelName).append("\" type=\"text\" class=\"uppercase\" />\n");
             }
 
-            sb.append("      </div>\n");
+            if (isRequired) {
+                sb.append("      <app-validation-message [validationMessage]=\"validationMessage\" [control]=\"form.controls.").append(f.camelName).append("\"></app-validation-message>\n");
+            }
+            sb.append("    </div>\n");
         }
 
-        sb.append("    </div>\n\n");
-        sb.append("    <div class=\"row mt-3\">\n");
-        sb.append("      <div class=\"col-12\">\n");
-        sb.append("        <app-button label=\"Salvar\" icon=\"fa fa-check\" (onClick)=\"salvar()\"></app-button>\n");
-        sb.append("        <app-button label=\"Voltar\" icon=\"fa fa-arrow-left\" styleClass=\"ui-button-secondary\" (onClick)=\"voltar()\"></app-button>\n");
-        sb.append("      </div>\n");
+        sb.append("  </div>\n");
+        sb.append("</div>\n");
+        sb.append("<div class=\"row logus-row border-bottom\">\n");
+        sb.append("  <div class=\"col-xs-6 col-sm-6 col-md-6 col-lg-12\">\n");
+        sb.append("    <app-button ngTypeButton=\"salvar\" ngClass=\"float-right\" (onClick)=\"salvar()\"></app-button>\n");
+        sb.append("    <app-button ngTypeButton=\"voltar\" ngClass=\"float-right\" (onClick)=\"voltar()\"></app-button>\n");
+        sb.append("  </div>\n");
         sb.append("    </div>\n");
         sb.append("  </form>\n");
         sb.append("</div>\n");
@@ -743,16 +797,38 @@ public class AngularCodeGenerator {
         return Character.toLowerCase(s.charAt(0)) + s.substring(1);
     }
 
+    /** Converte snake_case para camelCase usando columnNameExpansions quando disponível */
     private String snakeToCamel(String s) {
         if (s == null || s.isEmpty()) return s;
+        // Tenta expandir prefixos via TargetPatterns (cdg→codigo, dcr→descricao, etc)
+        Map<String, String> expansions = getColumnNameExpansions();
+        String[] parts = s.split("_");
         StringBuilder sb = new StringBuilder();
-        boolean nextUpper = false;
-        for (char c : s.toCharArray()) {
-            if (c == '_') { nextUpper = true; }
-            else { sb.append(nextUpper ? Character.toUpperCase(c) : c); nextUpper = false; }
+        for (int i = 0; i < parts.length; i++) {
+            String part = parts[i];
+            String expanded = expansions.getOrDefault(part, part);
+            if (i == 0) {
+                sb.append(expanded.toLowerCase());
+            } else {
+                sb.append(Character.toUpperCase(expanded.charAt(0))).append(expanded.substring(1).toLowerCase());
+            }
         }
-        if (sb.length() > 0) sb.setCharAt(0, Character.toLowerCase(sb.charAt(0)));
         return sb.toString();
+    }
+
+    private Map<String, String> getColumnNameExpansions() {
+        TargetPatterns tp = ProjectProfileStore.getInstance().getPatterns();
+        if (tp != null && tp.getColumnNameExpansions() != null) {
+            return tp.getColumnNameExpansions();
+        }
+        // Fallback: expansões mínimas hardcoded
+        Map<String, String> defaults = new LinkedHashMap<>();
+        defaults.put("cdg", "codigo"); defaults.put("dcr", "descricao"); defaults.put("dat", "data");
+        defaults.put("nmr", "numero"); defaults.put("qtd", "quantidade"); defaults.put("val", "valor");
+        defaults.put("flg", "flag"); defaults.put("flb", "flag"); defaults.put("pct", "percentual");
+        defaults.put("sgl", "sigla"); defaults.put("hor", "hora"); defaults.put("ped", "pedido");
+        defaults.put("prod", "produto"); defaults.put("auto", "automatico");
+        return defaults;
     }
 
     /** Representa um campo resolvido (de DelphiClass ou DfmForm.DatasetField) */
@@ -876,9 +952,21 @@ public class AngularCodeGenerator {
     /** Mapeia valor Delphi para TypeScript */
     private String mapDefaultValue(String delphiValue, String property) {
         if (delphiValue == null) return "null";
-        String lower = delphiValue.toLowerCase();
-        if (lower.contains("conexao.date") || lower.contains("date") || lower.equals("vhoje") ||
-            (property != null && property.equalsIgnoreCase("Date"))) {
+        String lower = delphiValue.toLowerCase().trim();
+        // Date - N (ex: Conexao.Date - 30 → subtrai N dias)
+        java.util.regex.Matcher dateMinus = java.util.regex.Pattern.compile(
+                "(?i)(?:conexao\\.date|vhoje)\\s*-\\s*(\\d+)").matcher(delphiValue);
+        if (dateMinus.find()) {
+            return "new Date(new Date().setDate(new Date().getDate() - " + dateMinus.group(1) + "))";
+        }
+        java.util.regex.Matcher datePlus = java.util.regex.Pattern.compile(
+                "(?i)(?:conexao\\.date|vhoje)\\s*\\+\\s*(\\d+)").matcher(delphiValue);
+        if (datePlus.find()) {
+            return "new Date(new Date().setDate(new Date().getDate() + " + datePlus.group(1) + "))";
+        }
+        if (lower.contains("conexao.date") || lower.contains("conexao.now") || lower.equals("vhoje") ||
+            (property != null && property.equalsIgnoreCase("Date") &&
+             (lower.contains("date") || lower.contains("now") || lower.contains("hoje")))) {
             return "new Date()";
         }
         if (lower.equals("true") || lower.equals("false")) return lower;
@@ -917,6 +1005,46 @@ public class AngularCodeGenerator {
             }
         }
         return validators.isEmpty() ? null : String.join(", ", validators);
+    }
+
+    /** Humaniza nome de componente Delphi para label Angular */
+    private String humanizeComponentName(String name) {
+        // edtCodigoFornecedorDisplay → Código Fornecedor
+        String stripped = name.replaceAll("^(?i)(edt|luc|cds|dts|bbt|lbl|grp|grd|pnl|chk|rdb|cbx)", "");
+        if (stripped.isEmpty()) stripped = name;
+        stripped = stripped.replaceAll("Display$", "").replaceAll("Filtro$", "");
+        // Split CamelCase
+        String spaced = stripped.replaceAll("([A-Z])", " $1").trim();
+        // Expande prefixos conhecidos
+        Map<String, String> exp = getColumnNameExpansions();
+        String[] words = spaced.split(" ");
+        StringBuilder lb = new StringBuilder();
+        for (String w : words) {
+            String lower = w.toLowerCase();
+            String expanded = exp.getOrDefault(lower, w);
+            if (lb.length() > 0) lb.append(" ");
+            lb.append(Character.toUpperCase(expanded.charAt(0))).append(expanded.substring(1));
+        }
+        return lb.toString();
+    }
+
+    /** Verifica se campo é required via fieldValidationRules */
+    private boolean isFieldRequired(String fieldName) {
+        if (ctx == null) return false;
+        return ctx.getFieldValidationRules().stream()
+                .anyMatch(r -> componentToFormControl(r.getField()).equalsIgnoreCase(fieldName)
+                        && "required".equals(r.getValidationType()));
+    }
+
+    private String mapColorToEmoji(String color) {
+        return switch (color) {
+            case "green" -> "\uD83D\uDFE2"; // 🟢
+            case "blue" -> "\uD83D\uDD35";  // 🔵
+            case "yellow" -> "\uD83D\uDFE1"; // 🟡
+            case "orange" -> "\uD83D\uDFE0"; // 🟠
+            case "red" -> "\uD83D\uDD34";    // 🔴
+            default -> "●";
+        };
     }
 
     /** Gera método getColorClass() se há calcCellColorRules */
