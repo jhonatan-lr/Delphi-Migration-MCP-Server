@@ -163,6 +163,8 @@ class ExtractBusinessRules extends BaseTool {
                 "de tela (FormShow/FormCreate): valores default, pré-seleções de combos, auto-loads e " +
                 "estados iniciais de componentes. Detecta regras de estado de botões (AfterScroll + Click): " +
                 "condições de habilitação, confirmações, ações executadas e permissões. " +
+                "Extrai validações por campo (ValidacaoOk → Validators Angular) e " +
+                "colorização de grids (CalcCellColors → [ngClass]). " +
                 "Para cada regra, fornece estratégia de migração e código Java/Angular sugerido.",
                 buildInputSchema(
                         "content", "string", "Conteúdo do código Delphi (.pas)",
@@ -193,6 +195,20 @@ class ExtractBusinessRules extends BaseTool {
                 if (!buttonRules.isEmpty()) {
                     result.put("buttonStateRulesTotal", buttonRules.size());
                     result.put("buttonStateRules", buttonRules);
+                }
+
+                // Field validation rules (ValidacaoOk → per-field structured rules)
+                List<FieldValidationRule> fieldValidations = parser.extractFieldValidationRules(content);
+                if (!fieldValidations.isEmpty()) {
+                    result.put("fieldValidationRulesTotal", fieldValidations.size());
+                    result.put("fieldValidationRules", fieldValidations);
+                }
+
+                // CalcCellColors (grid cell color coding)
+                List<CalcCellColorRule> colorRules = parser.extractCalcCellColorRules(content);
+                if (!colorRules.isEmpty()) {
+                    result.put("calcCellColorRulesTotal", colorRules.size());
+                    result.put("calcCellColorRules", colorRules);
                 }
 
                 return success(result);
@@ -1402,9 +1418,9 @@ para identificar contexto de classes, métodos e componentes. Fragmentos isolado
 resultados incompletos. O `content` é opcional — se omitido ou menor que 10 caracteres, \
 o MCP lê automaticamente do `file_path`.
 
-## extract_business_rules — 3 seções de output
+## extract_business_rules — 5 seções de output
 
-A tool `extract_business_rules` retorna 3 seções complementares numa única chamada:
+A tool `extract_business_rules` retorna 5 seções complementares numa única chamada:
 
 ### 1. rules — Validações e cálculos
 - Validações com `TLogusMessage.Warning`, `raise Exception`, `ShowMessage`
@@ -1428,6 +1444,22 @@ ele faz ao ser clicado (Click handler):
 - **requiresPermission**: referências a `Parametros.X.Y.Z` nas condições
 - **fieldReferences**: campos do dataset usados nas condições (ex: `dat_conf`)
 - **migrationHints**: sugestões concretas para Angular (ConfirmationService, [disabled], Router)
+
+### 4. fieldValidationRules — Validações estruturadas por campo (ValidacaoOk)
+Extrai validações do método `ValidacaoOk` / `ValidacaoOkNovoPedido` estruturadas por campo:
+- **required**: campo.Date = 0, campo.Text = EmptyStr, campo.KeyValue = Null
+- **cross_field**: comparação entre campos (date range max 90 dias, date order)
+- **pattern**: StrToInt no try/except → numeric only
+- **length**: Length(campo.Text) < N ou > N
+- Cada regra inclui `angularValidator` (ex: `Validators.required`) e `angularCode` para \
+custom validators (ex: `maxDateRange(90)`)
+
+### 5. calcCellColorRules — Colorização condicional do grid (CalcCellColors)
+Extrai lógica de cores de células do `CalcCellColors`:
+- **conditionField**: campo que determina a cor (ex: `flg_tp_pedido`)
+- **colorMappings**: valor → cor CSS (ex: 1=green, 2=blue, 3=yellow, 4=orange)
+- **label**: texto da legenda associado à cor (detectado por labels lblVerde, lblAzul)
+- **angularCode**: método `getColorClass()` pronto para usar com `[ngClass]` no PrimeNG
 
 Exemplo de uso:
 ```

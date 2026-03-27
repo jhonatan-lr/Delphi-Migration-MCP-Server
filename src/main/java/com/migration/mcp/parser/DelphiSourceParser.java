@@ -1473,6 +1473,343 @@ public class DelphiSourceParser {
         }
     }
 
+    // ── Field Validation Rules (ValidacaoOk → per-field structured rules) ──
+
+    /**
+     * Extrai validações estruturadas por campo de métodos ValidacaoOk.
+     * Detecta: required, cross-field (date range, order), pattern (numeric), custom.
+     */
+    public List<FieldValidationRule> extractFieldValidationRules(String src) {
+        List<FieldValidationRule> rules = new ArrayList<>();
+
+        // Encontra métodos Validacao* e ValidacaoOk*
+        Pattern methodPattern = Pattern.compile(
+                "(?i)function\\s+\\w+\\.(Validacao\\w*)\\s*(?:\\([^)]*\\))?\\s*:\\s*Boolean\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                Pattern.MULTILINE);
+        Matcher mm = methodPattern.matcher(src);
+
+        while (mm.find()) {
+            String methodName = mm.group(1);
+            String body = mm.group(0);
+            if (body.length() > 15000) body = body.substring(0, 15000);
+
+            extractFieldValidationsFromBody(body, methodName, rules);
+        }
+
+        return rules;
+    }
+
+    private void extractFieldValidationsFromBody(String body, String methodName, List<FieldValidationRule> rules) {
+        // Padrão 1: campo.Date = 0 ou campo.Text = EmptyStr → REQUIRED
+        // if (edtDataEmissaoDe.Date = 0) then ... TLogusMessage.Warning('msg')
+        Pattern requiredDatePat = Pattern.compile(
+                "(?i)if\\s*\\(\\s*(\\w+)\\.Date\\s*=\\s*0\\s*\\)\\s*then[\\s\\S]*?TLogusMessage\\.Warning\\s*\\(\\s*'([^']*)'");
+        Matcher m1 = requiredDatePat.matcher(body);
+        while (m1.find()) {
+            FieldValidationRule rule = new FieldValidationRule();
+            rule.setField(m1.group(1));
+            rule.setValidationType("required");
+            rule.setMessage(m1.group(2));
+            rule.setSourceMethod(methodName);
+            rule.setAngularValidator("Validators.required");
+            rules.add(rule);
+        }
+
+        // Padrão: campo.Text = EmptyStr ou campo.Text = '' → REQUIRED (text field)
+        Pattern requiredTextPat = Pattern.compile(
+                "(?i)if\\s*\\(\\s*(\\w+)\\.Text\\s*=\\s*(?:EmptyStr|'')\\s*\\)\\s*then[\\s\\S]*?TLogusMessage\\.Warning\\s*\\(\\s*'([^']*)'");
+        Matcher m1b = requiredTextPat.matcher(body);
+        while (m1b.find()) {
+            FieldValidationRule rule = new FieldValidationRule();
+            rule.setField(m1b.group(1));
+            rule.setValidationType("required");
+            rule.setMessage(m1b.group(2));
+            rule.setSourceMethod(methodName);
+            rule.setAngularValidator("Validators.required");
+            rules.add(rule);
+        }
+
+        // Padrão: campo.KeyValue = Null → REQUIRED (lookup/combo)
+        Pattern requiredLookupPat = Pattern.compile(
+                "(?i)if\\s*\\(\\s*(\\w+)\\.KeyValue\\s*=\\s*Null\\s*\\)\\s*then[\\s\\S]*?TLogusMessage\\.Warning\\s*\\(\\s*'([^']*)'");
+        Matcher m1c = requiredLookupPat.matcher(body);
+        while (m1c.find()) {
+            FieldValidationRule rule = new FieldValidationRule();
+            rule.setField(m1c.group(1));
+            rule.setValidationType("required");
+            rule.setMessage(m1c.group(2));
+            rule.setSourceMethod(methodName);
+            rule.setAngularValidator("Validators.required");
+            rules.add(rule);
+        }
+
+        // Padrão 2: (campoB.Date - campoA.Date) > N → MAX_RANGE (cross-field)
+        Pattern maxRangePat = Pattern.compile(
+                "(?i)if\\s*\\(\\s*\\(\\s*(\\w+)\\.Date\\s*-\\s*(\\w+)\\.Date\\s*\\)\\s*>\\s*(\\d+)\\s*\\)\\s*then[\\s\\S]*?TLogusMessage\\.Warning\\s*\\(\\s*'([^']*)'");
+        Matcher m2 = maxRangePat.matcher(body);
+        while (m2.find()) {
+            FieldValidationRule rule = new FieldValidationRule();
+            rule.setField(m2.group(1));
+            rule.setRelatedField(m2.group(2));
+            rule.setValidationType("cross_field");
+            rule.setOperator("max_range");
+            rule.setValue(m2.group(3));
+            rule.setMessage(m2.group(4));
+            rule.setSourceMethod(methodName);
+            rule.setAngularValidator("Custom validator: maxDateRange(" + m2.group(3) + ")");
+            rule.setAngularCode("// Cross-field validator\n" +
+                    "static maxDateRange(days: number): ValidatorFn {\n" +
+                    "  return (group: AbstractControl): ValidationErrors | null => {\n" +
+                    "    const de = group.get('" + toCamelCase(m2.group(2)) + "')?.value;\n" +
+                    "    const ate = group.get('" + toCamelCase(m2.group(1)) + "')?.value;\n" +
+                    "    if (de && ate && diffDays(ate, de) > " + m2.group(3) + ") {\n" +
+                    "      return { maxDateRange: { max: " + m2.group(3) + " } };\n" +
+                    "    }\n" +
+                    "    return null;\n" +
+                    "  };\n" +
+                    "}");
+            rules.add(rule);
+        }
+
+        // Padrão 3: campoB.Date < campoA.Date → DATE_ORDER (cross-field)
+        Pattern dateOrderPat = Pattern.compile(
+                "(?i)if\\s*\\(\\s*(\\w+)\\.Date\\s*<\\s*(\\w+)\\.Date\\s*\\)\\s*then[\\s\\S]*?TLogusMessage\\.Warning\\s*\\(\\s*'([^']*)'");
+        Matcher m3 = dateOrderPat.matcher(body);
+        while (m3.find()) {
+            FieldValidationRule rule = new FieldValidationRule();
+            rule.setField(m3.group(1));
+            rule.setRelatedField(m3.group(2));
+            rule.setValidationType("cross_field");
+            rule.setOperator(">=");
+            rule.setMessage(m3.group(3));
+            rule.setSourceMethod(methodName);
+            rule.setAngularValidator("Custom validator: dateGreaterThanOrEqual('" + toCamelCase(m3.group(2)) + "')");
+            rules.add(rule);
+        }
+
+        // Padrão 4: StrToInt(campo.Text) com except → PATTERN (numeric only)
+        Pattern numericPat = Pattern.compile(
+                "(?i)(?:try[\\s\\S]*?)?StrToInt\\s*\\(\\s*(\\w+)\\.Text\\s*\\)[\\s\\S]*?except[\\s\\S]*?TLogusMessage\\.Warning\\s*\\(\\s*'([^']*)'");
+        Matcher m4 = numericPat.matcher(body);
+        while (m4.find()) {
+            FieldValidationRule rule = new FieldValidationRule();
+            rule.setField(m4.group(1));
+            rule.setValidationType("pattern");
+            rule.setValue("numeric_only");
+            rule.setMessage(m4.group(2));
+            rule.setSourceMethod(methodName);
+            rule.setAngularValidator("Validators.pattern('^[0-9]*$')");
+            rules.add(rule);
+        }
+
+        // Padrão 5: StrToFloat / StrToCurr → decimal pattern
+        Pattern decimalPat = Pattern.compile(
+                "(?i)(?:try[\\s\\S]*?)?(?:StrToFloat|StrToCurr)\\s*\\(\\s*(\\w+)\\.Text\\s*\\)[\\s\\S]*?except[\\s\\S]*?TLogusMessage\\.Warning\\s*\\(\\s*'([^']*)'");
+        Matcher m5 = decimalPat.matcher(body);
+        while (m5.find()) {
+            FieldValidationRule rule = new FieldValidationRule();
+            rule.setField(m5.group(1));
+            rule.setValidationType("pattern");
+            rule.setValue("decimal");
+            rule.setMessage(m5.group(2));
+            rule.setSourceMethod(methodName);
+            rule.setAngularValidator("Validators.pattern('^[0-9]+(\\\\.[0-9]+)?$')");
+            rules.add(rule);
+        }
+
+        // Padrão 6: Length(campo.Text) > N ou < N → MAX/MIN LENGTH
+        Pattern lengthPat = Pattern.compile(
+                "(?i)if\\s*\\(\\s*Length\\s*\\(\\s*(\\w+)\\.Text\\s*\\)\\s*([<>])\\s*(\\d+)\\s*\\)\\s*then[\\s\\S]*?TLogusMessage\\.Warning\\s*\\(\\s*'([^']*)'");
+        Matcher m6 = lengthPat.matcher(body);
+        while (m6.find()) {
+            FieldValidationRule rule = new FieldValidationRule();
+            rule.setField(m6.group(1));
+            rule.setValidationType("length");
+            rule.setOperator(m6.group(2).equals("<") ? "minLength" : "maxLength");
+            rule.setValue(m6.group(3));
+            rule.setMessage(m6.group(4));
+            rule.setSourceMethod(methodName);
+            rule.setAngularValidator(m6.group(2).equals("<")
+                    ? "Validators.minLength(" + m6.group(3) + ")"
+                    : "Validators.maxLength(" + m6.group(3) + ")");
+            rules.add(rule);
+        }
+    }
+
+    private String toCamelCase(String componentName) {
+        // edtDataEmissaoDe → dataEmissaoDe (remove prefixo edt/luc/cds/etc)
+        String name = componentName.replaceAll("^(?i)(edt|luc|cds|dts|bbt|lbl|grp|grd|pnl|chk)", "");
+        if (name.isEmpty()) return componentName;
+        return Character.toLowerCase(name.charAt(0)) + name.substring(1);
+    }
+
+    // ── CalcCellColors (Grid cell color coding) ─────────────────────────────
+
+    /**
+     * Extrai lógica de colorização condicional de grids (CalcCellColors events).
+     * Detecta: campo de condição, mapeamento valor→cor, e gera [ngClass] sugerido.
+     */
+    public List<CalcCellColorRule> extractCalcCellColorRules(String src) {
+        List<CalcCellColorRule> rules = new ArrayList<>();
+
+        // Encontra métodos CalcCellColors
+        Pattern methodPattern = Pattern.compile(
+                "(?i)procedure\\s+\\w+\\.(\\w+CalcCellColors)\\s*\\([^)]*\\)\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                Pattern.MULTILINE);
+        Matcher mm = methodPattern.matcher(src);
+
+        while (mm.find()) {
+            String methodName = mm.group(1);
+            String body = mm.group(0);
+            if (body.length() > 10000) body = body.substring(0, 10000);
+
+            // Extrai grid name: grdPedidoAutomaticoCalcCellColors → grdPedidoAutomatico
+            String gridName = methodName.replaceAll("(?i)CalcCellColors$", "");
+
+            CalcCellColorRule rule = new CalcCellColorRule();
+            rule.setGridName(gridName);
+
+            // Detecta campo de condição: FieldByName('campo').AsInteger ou .AsString
+            Matcher fieldM = Pattern.compile("(?i)(?:case\\s+)?\\w+\\.FieldByName\\s*\\(\\s*'([^']+)'\\s*\\)\\.As(Integer|String)").matcher(body);
+            if (fieldM.find()) {
+                rule.setConditionField(fieldM.group(1));
+            }
+
+            // Detecta case/of com cores: N: AFont.Color := clXxx
+            Pattern casePat = Pattern.compile("(?i)(\\d+)\\s*:\\s*AFont\\.Color\\s*:=\\s*(cl\\w+)");
+            Matcher cm = casePat.matcher(body);
+            while (cm.find()) {
+                String value = cm.group(1);
+                String delphiColor = cm.group(2);
+                String cssColor = mapDelphiColor(delphiColor);
+                String cssClass = "text-" + cssColor;
+                rule.getColorMappings().add(new CalcCellColorRule.ColorMapping(value, cssColor, cssClass, null));
+            }
+
+            // Detecta if/then com cores: if (campo = N) then AFont.Color := clXxx
+            Pattern ifColorPat = Pattern.compile("(?i)(?:=\\s*(\\d+)|'([^']+)')\\s*(?:then|:)\\s*[\\s\\S]*?AFont\\.Color\\s*:=\\s*(cl\\w+)");
+            if (rule.getColorMappings().isEmpty()) {
+                Matcher icm = ifColorPat.matcher(body);
+                while (icm.find()) {
+                    String value = icm.group(1) != null ? icm.group(1) : icm.group(2);
+                    String delphiColor = icm.group(3);
+                    String cssColor = mapDelphiColor(delphiColor);
+                    rule.getColorMappings().add(new CalcCellColorRule.ColorMapping(value, cssColor, "text-" + cssColor, null));
+                }
+            }
+
+            // Tenta associar labels de legenda (lblVerde, lblAzul etc)
+            enrichWithLegendLabels(src, rule);
+
+            // Gera código Angular sugerido
+            if (!rule.getColorMappings().isEmpty()) {
+                rule.setAngularCode(generateAngularColorCode(rule));
+                rules.add(rule);
+            }
+        }
+
+        return rules;
+    }
+
+    private void enrichWithLegendLabels(String src, CalcCellColorRule rule) {
+        // Procura labels como lblVerde, lblAzul no type section
+        // E tenta mapear pela cor: verde→green, azul→blue
+        Map<String, String> colorToLabel = new LinkedHashMap<>();
+
+        // Procura labels com Caption no DFM ou Text atribuído
+        // Padrão: lblVerde: TLabel / lblAzul: TLabel no type section
+        // E depois Caption = 'Automático' no DFM
+        // Como estamos no .pas, procura atribuições: lblVerde.Caption := 'Automático'
+        Pattern labelPat = Pattern.compile("(?i)(lbl\\w+)\\.Caption\\s*:=\\s*'([^']*)'");
+        Matcher lm = labelPat.matcher(src);
+        while (lm.find()) {
+            String labelName = lm.group(1).toLowerCase();
+            String caption = lm.group(2);
+            // Mapeia nome do label para cor
+            if (labelName.contains("verde") || labelName.contains("green")) colorToLabel.put("green", caption);
+            else if (labelName.contains("azul") || labelName.contains("blue")) colorToLabel.put("blue", caption);
+            else if (labelName.contains("amarelo") || labelName.contains("yellow")) colorToLabel.put("yellow", caption);
+            else if (labelName.contains("laranja") || labelName.contains("orange")) colorToLabel.put("orange", caption);
+            else if (labelName.contains("vermelho") || labelName.contains("red")) colorToLabel.put("red", caption);
+        }
+
+        // Também procura labels declaradas no type section: lblVerde: TLabel → tenta pegar
+        // caption do DFM que pode estar na mesma string (menos provável no .pas)
+        // Tenta pelo nome do label que contém a cor + "Automatico", "Manual" etc
+        // Procura variáveis com nomes sugestivos: lblAutomatico, lblManual, lblTemporario
+        Pattern typeLabelPat = Pattern.compile("(?i)(lbl(\\w+))\\s*:\\s*TLabel");
+        Matcher tlm = typeLabelPat.matcher(src);
+        while (tlm.find()) {
+            String labelName = tlm.group(1).toLowerCase();
+            String labelText = tlm.group(2);
+            // Se o label NÃO é uma cor, pode ser a legenda de uma cor
+            if (!labelName.contains("verde") && !labelName.contains("azul") &&
+                !labelName.contains("amarelo") && !labelName.contains("laranja") &&
+                !labelName.contains("vermelho") && !labelName.contains("data") &&
+                !labelName.contains("filial") && !labelName.contains("secao") &&
+                !labelName.contains("tipo") && !labelName.contains("situacao") &&
+                !labelName.contains("hint") && !labelName.contains("numero") &&
+                !labelName.contains("previsao") && !labelName.contains("fornecedor")) {
+                // É um label de legenda potencial como lblAutomatico, lblManual
+                // Não temos como mapear valor→label sem contexto adicional, mas registramos
+            }
+        }
+
+        // Associa labels encontradas aos color mappings
+        for (CalcCellColorRule.ColorMapping mapping : rule.getColorMappings()) {
+            String label = colorToLabel.get(mapping.getColor());
+            if (label != null) {
+                mapping.setLabel(label);
+            }
+        }
+    }
+
+    private String generateAngularColorCode(CalcCellColorRule rule) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("// No template do Grid, adicionar [ngClass] na coluna:\n");
+        sb.append("// [ngClass]=\"getColorClass(row.").append(rule.getConditionField()).append(")\"\n\n");
+        sb.append("getColorClass(value: number): string {\n");
+        sb.append("  switch (value) {\n");
+        for (CalcCellColorRule.ColorMapping mapping : rule.getColorMappings()) {
+            sb.append("    case ").append(mapping.getValue()).append(": return '").append(mapping.getCssClass()).append("';");
+            if (mapping.getLabel() != null) {
+                sb.append(" // ").append(mapping.getLabel());
+            }
+            sb.append("\n");
+        }
+        sb.append("    default: return '';\n");
+        sb.append("  }\n");
+        sb.append("}");
+        return sb.toString();
+    }
+
+    private String mapDelphiColor(String delphiColor) {
+        if (delphiColor == null) return "inherit";
+        return switch (delphiColor.toLowerCase()) {
+            case "clgreen" -> "green";
+            case "clblue" -> "blue";
+            case "clyellow" -> "yellow";
+            case "clred" -> "red";
+            case "clwhite" -> "white";
+            case "clblack" -> "black";
+            case "clgray", "clgrey" -> "gray";
+            case "clnavy" -> "navy";
+            case "clmaroon" -> "maroon";
+            case "clpurple" -> "purple";
+            case "clteal" -> "teal";
+            case "clolive" -> "olive";
+            case "claqua" -> "aqua";
+            case "clfuchsia" -> "fuchsia";
+            case "clsilver" -> "silver";
+            case "cllime" -> "lime";
+            case "clwindowtext" -> "inherit";
+            case "clwindow" -> "transparent";
+            case "clweborange" -> "orange";
+            case "clwebgreen" -> "green";
+            default -> delphiColor.replaceAll("(?i)^cl", "").toLowerCase();
+        };
+    }
+
     // ── Business Rules ───────────────────────────────────────────────────────
 
     public List<BusinessRule> extractBusinessRules(String src) {
