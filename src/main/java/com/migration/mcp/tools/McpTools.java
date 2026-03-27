@@ -398,8 +398,10 @@ class GenerateJavaClassTool extends BaseTool {
                             }
                         }
                     }
+                    // Tabela principal para Repository/Vo/PesquisaDto
+                    String tableForRepo = extractMainTable(unit.getSqlQueries(), 0);
                     if (generate.contains("repository")) {
-                        generatedFiles.put(cleanBase + "Repository.java", generator.generateRepository(dc, packageName));
+                        generatedFiles.put(cleanBase + "Repository.java", generator.generateRepository(dc, packageName, tableForRepo, finalDfmFields));
                     }
                     if (generate.contains("service")) {
                         generatedFiles.put(cleanBase + "Service.java", generator.generateService(dc, packageName, unit.getSqlQueries(), unit.getBusinessRules()));
@@ -409,10 +411,10 @@ class GenerateJavaClassTool extends BaseTool {
                     }
                     if (generate.contains("dto")) {
                         generatedFiles.put(cleanBase + "Dto.java", generator.generateDto(dc, packageName, finalDfmFields));
-                        generatedFiles.put("Pesquisa" + cleanBase + "Dto.java", generator.generatePesquisaDto(dc, packageName, finalDfmFields));
+                        generatedFiles.put("Pesquisa" + cleanBase + "Dto.java", generator.generatePesquisaDto(dc, packageName, finalDfmFields, tableForRepo));
                     }
                     if (generate.contains("vo")) {
-                        generatedFiles.put(cleanBase + "GridVo.java", generator.generateVo(dc, packageName, finalDfmFields));
+                        generatedFiles.put("Grid" + cleanBase + "Vo.java", generator.generateVo(dc, packageName, finalDfmFields, tableForRepo));
                     }
                 }
 
@@ -977,19 +979,30 @@ class GenerateFullModuleTool extends BaseTool {
                     }
                 }
 
+                // Resolve entityClassName consistente via knownTables
+                String entityClassName = null;
+                if (mainTable != null) {
+                    TargetPatterns tp = ProjectProfileStore.getInstance().getPatterns();
+                    if (tp != null && tp.getKnownTables().containsKey(mainTable)) {
+                        entityClassName = tp.getKnownTables().get(mainTable).getEntity();
+                        if (entityClassName != null) entityClassName = entityClassName.replace("Entity", "");
+                    }
+                }
+
                 // ── Java (7 arquivos) ──
                 Map<String, String> javaFiles = new LinkedHashMap<>();
                 for (DelphiClass dc : unit.getClasses()) {
-                    String baseName = dc.getName().replaceAll("^T", "").replaceAll("^(?i)(frm|Frm)", "");
+                    String baseName = entityClassName != null ? entityClassName :
+                        dc.getName().replaceAll("^T", "").replaceAll("^(?i)(frm|Frm)", "");
                     if (baseName.isEmpty()) baseName = dc.getName().replaceAll("^T", "");
 
-                    javaFiles.put(baseName + "Entity.java", javaGenerator.generateEntity(dc, packageName, dfmFields, mainTable));
-                    javaFiles.put(baseName + "Repository.java", javaGenerator.generateRepository(dc, packageName));
+                    javaFiles.put(baseName + "Entity.java", javaGenerator.generateEntity(dc, packageName, dfmFields, mainTable, entityClassName));
+                    javaFiles.put(baseName + "Repository.java", javaGenerator.generateRepository(dc, packageName, mainTable, dfmFields, entityClassName));
                     javaFiles.put(baseName + "Service.java", javaGenerator.generateService(dc, packageName, unit.getSqlQueries(), unit.getBusinessRules()));
                     javaFiles.put(baseName + "Resource.java", javaGenerator.generateController(dc, packageName));
                     javaFiles.put(baseName + "Dto.java", javaGenerator.generateDto(dc, packageName, dfmFields));
-                    javaFiles.put("Pesquisa" + baseName + "Dto.java", javaGenerator.generatePesquisaDto(dc, packageName, dfmFields));
-                    javaFiles.put(baseName + "GridVo.java", javaGenerator.generateVo(dc, packageName, dfmFields));
+                    javaFiles.put("Pesquisa" + baseName + "Dto.java", javaGenerator.generatePesquisaDto(dc, packageName, dfmFields, mainTable, entityClassName));
+                    javaFiles.put("Grid" + baseName + "Vo.java", javaGenerator.generateVo(dc, packageName, dfmFields, mainTable, entityClassName));
                 }
                 result.put("javaFiles", javaFiles);
 

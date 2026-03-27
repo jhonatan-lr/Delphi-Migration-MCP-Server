@@ -668,31 +668,163 @@ public class JavaCodeGenerator {
     // ── Repository ───────────────────────────────────────────────────────────
 
     public String generateRepository(DelphiClass dc, String packageName) {
-        String baseName = cleanClassNameWithProfile(dc.getName());
+        return generateRepository(dc, packageName, null, null, null);
+    }
+
+    public String generateRepository(DelphiClass dc, String packageName,
+                                      String tableName, List<DfmForm.DatasetField> dfmFields) {
+        return generateRepository(dc, packageName, tableName, dfmFields, null);
+    }
+
+    public String generateRepository(DelphiClass dc, String packageName,
+                                      String tableName, List<DfmForm.DatasetField> dfmFields,
+                                      String entityClassName) {
+        // Fix 1: usar entityClassName se fornecido, para consistência com entity gerada
+        String baseName = entityClassName != null ? entityClassName : cleanClassNameWithProfile(dc.getName());
         String entityClass = baseName + "Entity";
         String repoName = baseName + "Repository";
+        String voClass = "Grid" + baseName + "Vo";
+        String modulo = toLowerFirst(baseName);
+
+        // Resolve campos da entity para construir JPQL
+        List<EntityField> entityFields = resolveEntityFields(dc, dfmFields, tableName);
+
+        // Fix 3: coletar imports necessários dos tipos usados nos @Param e filtros
+        Set<String> extraImports = new LinkedHashSet<>();
+        for (EntityField ef : entityFields) {
+            if (ef.isDate) extraImports.add("import logusretail.manager.type.LogusDateTime;\n");
+            if (ef.isEnum && ef.enumClassName != null) {
+                extraImports.add("import logus.corporativo.api.ennumerator." + modulo + "." + ef.enumClassName + ";\n");
+            }
+        }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("package ").append(packageName).append(".repository;\n\n");
+        sb.append("package ").append(packageName).append(".repository.").append(modulo).append(";\n\n");
         sb.append("import ").append(packageName).append(".entity.").append(entityClass).append(";\n");
+        sb.append("import ").append(packageName).append(".vo.").append(modulo).append(".").append(voClass).append(";\n");
+        for (String imp : extraImports) sb.append(imp);
+        sb.append("import org.springframework.data.domain.Page;\n");
+        sb.append("import org.springframework.data.domain.Pageable;\n");
         sb.append("import org.springframework.data.jpa.repository.JpaRepository;\n");
-        sb.append("import org.springframework.data.jpa.repository.JpaSpecificationExecutor;\n");
         sb.append("import org.springframework.data.jpa.repository.Query;\n");
         sb.append("import org.springframework.data.repository.query.Param;\n");
-        sb.append("import org.springframework.stereotype.Repository;\n");
-        sb.append("import org.springframework.transaction.annotation.Transactional;\n\n");
+        sb.append("import org.springframework.stereotype.Repository;\n\n");
         sb.append("import java.util.List;\n\n");
 
         sb.append("@Repository\n");
-        sb.append("@Transactional(readOnly = true)\n");
         sb.append("public interface ").append(repoName);
-        sb.append(" extends JpaRepository<").append(entityClass).append(", Integer>");
-        sb.append(", JpaSpecificationExecutor<").append(entityClass).append("> {\n\n");
+        sb.append(" extends JpaRepository<").append(entityClass).append(", Integer> {\n");
+        sb.append("    //@formatter:off\n\n");
 
-        sb.append("    // TODO: Adicionar metodos de consulta baseados nas queries SQL extraidas\n\n");
+        // ── Campos do grid (para SELECT NEW) ──
+        List<EntityField> voFields = new ArrayList<>();
+        for (EntityField ef : entityFields) {
+            if (ef.colName != null && !ef.colName.equals(detectPkColumn(entityFields, tableName))) {
+                voFields.add(ef);
+            }
+        }
 
-        sb.append("}\n");
+        // ── Campos de filtro (para WHERE) ──
+        List<EntityField> filterFields = resolveFilterFields(entityFields);
+
+        // ── String FROM constante ──
+        sb.append("    String FROM = \" FROM ").append(entityClass).append(" p\"");
+        // JOINs para @ManyToOne
+        for (EntityField ef : voFields) {
+            if (ef.manyToOneEntity != null) {
+                sb.append("\n        + \" LEFT JOIN p.").append(ef.javaName).append(" ").append(ef.javaName).append("\"");
+            }
+        }
+        // WHERE com filtros opcionais (sem WHERE 1=1 — começa direto com condições)
+        boolean firstFilter = true;
+        for (EntityField ef : filterFields) {
+            String paramName = ef.javaName;
+            String prefix = firstFilter ? "\n        + \" WHERE " : "\n        + \"   AND ";
+            firstFilter = false;
+            if (ef.manyToOneEntity != null) {
+                sb.append(prefix).append("(:").append(paramName).append(" IS NULL OR p.").append(ef.javaName).append(".id = :").append(paramName).append(")\"");
+            } else if (ef.isDate) {
+                // Fix 2: sem CAST — LogusDateTime no @Param, JPA resolve comparação
+                sb.append(prefix).append("(:").append(paramName).append(" IS NULL OR p.").append(ef.javaName).append(" >= :").append(paramName).append(")\"");
+            } else {
+                sb.append(prefix).append("(:").append(paramName).append(" IS NULL OR p.").append(ef.javaName).append(" = :").append(paramName).append(")\"");
+            }
+        }
+        sb.append(";\n\n");
+
+        // ── SELECT NEW para Vo ──
+        String selectNew = buildSelectNew(packageName, modulo, voClass, voFields);
+
+        // ── pesquisar (Page) ──
+        sb.append("    @Query(value = ").append(selectNew).append("\n        + FROM)\n");
+        sb.append("    Page<").append(voClass).append("> pesquisar(\n");
+        appendFilterParams(sb, filterFields);
+        sb.append("        Pageable pageable);\n\n");
+
+        // ── exportar (List) ──
+        sb.append("    @Query(value = ").append(selectNew).append("\n        + FROM\n        + \" ORDER BY p.id\")\n");
+        sb.append("    List<").append(voClass).append("> exportar(\n");
+        appendFilterParams(sb, filterFields);
+        sb.deleteCharAt(sb.length() - 1); // remove último \n
+        // remove trailing comma+space from last param
+        int lastComma = sb.lastIndexOf(",");
+        if (lastComma > sb.lastIndexOf(")")) {
+            sb.replace(lastComma, lastComma + 1, ");");
+        } else {
+            sb.append("    );\n");
+        }
+
+        sb.append("\n    //@formatter:on\n}\n");
         return sb.toString();
+    }
+
+    /** Constrói SELECT NEW Vo(...) JPQL */
+    private String buildSelectNew(String packageName, String modulo, String voClass, List<EntityField> voFields) {
+        StringBuilder s = new StringBuilder();
+        s.append("\"SELECT NEW ").append(packageName).append(".vo.").append(modulo).append(".").append(voClass).append("(\"");
+        s.append("\n        + \"       p.id");
+        for (EntityField ef : voFields) {
+            s.append(",\"");
+            if (ef.manyToOneEntity != null) {
+                s.append("\n        + \"       ").append(ef.javaName).append(".id");
+            } else {
+                s.append("\n        + \"       p.").append(ef.javaName);
+            }
+        }
+        s.append("\"");
+        s.append("\n        + \" )\"");
+        return s.toString();
+    }
+
+    /** Adiciona @Param para cada filtro */
+    private void appendFilterParams(StringBuilder sb, List<EntityField> filterFields) {
+        for (EntityField ef : filterFields) {
+            String type = ef.manyToOneEntity != null ? "Integer" : ef.javaType;
+            if (ef.isDate) type = "LogusDateTime";
+            sb.append("        @Param(\"").append(ef.javaName).append("\") ").append(type).append(" ").append(ef.javaName).append(",\n");
+        }
+    }
+
+    /** Seleciona campos de filtro: filial, status, datas, enums (campos tipicamente filtráveis) */
+    private List<EntityField> resolveFilterFields(List<EntityField> entityFields) {
+        List<EntityField> filters = new ArrayList<>();
+        for (EntityField ef : entityFields) {
+            // FKs comuns como filtro (filial, status, etc.)
+            if (ef.manyToOneEntity != null) {
+                filters.add(ef);
+                continue;
+            }
+            // Enums (status, tipo)
+            if (ef.isEnum) {
+                filters.add(ef);
+                continue;
+            }
+            // Datas (períodos)
+            if (ef.isDate && ef.colName != null && !ef.colName.contains("cancel") && !ef.colName.contains("ativacao")) {
+                filters.add(ef);
+            }
+        }
+        return filters;
     }
 
     // ── Service ──────────────────────────────────────────────────────────────
@@ -979,89 +1111,189 @@ public class JavaCodeGenerator {
     // ── PesquisaDto ──────────────────────────────────────────────────────────
 
     public String generatePesquisaDto(DelphiClass dc, String packageName) {
-        return generatePesquisaDto(dc, packageName, null);
+        return generatePesquisaDto(dc, packageName, null, null, null);
     }
 
     public String generatePesquisaDto(DelphiClass dc, String packageName, List<DfmForm.DatasetField> dfmFields) {
-        String baseName = cleanClassNameWithProfile(dc.getName());
+        return generatePesquisaDto(dc, packageName, dfmFields, null, null);
+    }
+
+    public String generatePesquisaDto(DelphiClass dc, String packageName,
+                                       List<DfmForm.DatasetField> dfmFields, String tableName) {
+        return generatePesquisaDto(dc, packageName, dfmFields, tableName, null);
+    }
+
+    public String generatePesquisaDto(DelphiClass dc, String packageName,
+                                       List<DfmForm.DatasetField> dfmFields, String tableName,
+                                       String entityClassName) {
+        String baseName = entityClassName != null ? entityClassName : cleanClassNameWithProfile(dc.getName());
         String pesquisaDtoName = "Pesquisa" + baseName + "Dto";
+        String modulo = toLowerFirst(baseName);
+
+        // Resolve campos da entity para extrair filtros
+        List<EntityField> entityFields = resolveEntityFields(dc, dfmFields, tableName);
+        List<EntityField> filterFields = resolveFilterFields(entityFields);
 
         StringBuilder sb = new StringBuilder();
-        sb.append("package ").append(packageName).append(".dto.").append(toLowerFirst(baseName)).append(";\n\n");
+        sb.append("package ").append(packageName).append(".dto.").append(modulo).append(";\n\n");
         sb.append("import ").append(packageName).append(".lazyload.dto.LazyLoadDto;\n\n");
-        sb.append("import java.io.Serializable;\n\n");
+        sb.append("import java.io.Serializable;\n");
+        sb.append("import java.util.List;\n\n");
 
         sb.append("public class ").append(pesquisaDtoName).append(" implements Serializable {\n\n");
         sb.append("    private static final long serialVersionUID = 1L;\n\n");
-        sb.append("    private LazyLoadDto lazyDto;\n");
 
-        List<String[]> fieldList = buildFieldList(dc, dfmFields);
-        for (String[] f : fieldList) {
-            sb.append("    private String ").append(f[1]).append(";\n");
+        // Campos de filtro com tipos corretos
+        for (EntityField ef : filterFields) {
+            String dtoType = pesquisaFieldType(ef);
+            sb.append("    private ").append(dtoType).append(" ").append(ef.javaName).append(";\n");
+        }
+        sb.append("\n    private LazyLoadDto lazyDto;\n\n");
+
+        // Getters & Setters com this.
+        for (EntityField ef : filterFields) {
+            String dtoType = pesquisaFieldType(ef);
+            String cap = capitalize(ef.javaName);
+            sb.append("    public ").append(dtoType).append(" get").append(cap).append("() {\n");
+            sb.append("        return this.").append(ef.javaName).append(";\n    }\n\n");
+            sb.append("    public void set").append(cap).append("(").append(dtoType).append(" ").append(ef.javaName).append(") {\n");
+            sb.append("        this.").append(ef.javaName).append(" = ").append(ef.javaName).append(";\n    }\n\n");
         }
 
-        sb.append("\n    public LazyLoadDto getLazyDto() { return lazyDto; }\n");
-        sb.append("    public void setLazyDto(LazyLoadDto lazyDto) { this.lazyDto = lazyDto; }\n\n");
-
-        for (String[] f : fieldList) {
-            String cap = capitalize(f[1]);
-            sb.append("    public String get").append(cap).append("() { return ").append(f[1]).append("; }\n");
-            sb.append("    public void set").append(cap).append("(String ").append(f[1]).append(") { this.").append(f[1]).append(" = ").append(f[1]).append("; }\n\n");
-        }
+        sb.append("    public LazyLoadDto getLazyDto() {\n");
+        sb.append("        return this.lazyDto;\n    }\n\n");
+        sb.append("    public void setLazyDto(LazyLoadDto lazyDto) {\n");
+        sb.append("        this.lazyDto = lazyDto;\n    }\n");
 
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /** Tipo do campo no PesquisaDto: FKs→Integer, datas→String, enums→Integer */
+    private String pesquisaFieldType(EntityField ef) {
+        if (ef.manyToOneEntity != null) return "Integer";
+        if (ef.isDate) return "String";
+        if (ef.isEnum) return "Integer";
+        return ef.javaType;
     }
 
     // ── GridVo ───────────────────────────────────────────────────────────────
 
     public String generateVo(DelphiClass dc, String packageName) {
-        return generateVo(dc, packageName, null);
+        return generateVo(dc, packageName, null, null, null);
     }
 
     public String generateVo(DelphiClass dc, String packageName, List<DfmForm.DatasetField> dfmFields) {
-        String baseName = cleanClassNameWithProfile(dc.getName());
-        String entityClass = baseName + "Entity";
-        String voName = baseName + "GridVo";
+        return generateVo(dc, packageName, dfmFields, null, null);
+    }
+
+    public String generateVo(DelphiClass dc, String packageName,
+                              List<DfmForm.DatasetField> dfmFields, String tableName) {
+        return generateVo(dc, packageName, dfmFields, tableName, null);
+    }
+
+    public String generateVo(DelphiClass dc, String packageName,
+                              List<DfmForm.DatasetField> dfmFields, String tableName,
+                              String entityClassName) {
+        String baseName = entityClassName != null ? entityClassName : cleanClassNameWithProfile(dc.getName());
+        String voName = "Grid" + baseName + "Vo";
+        String modulo = toLowerFirst(baseName);
+
+        // Resolve campos da entity
+        List<EntityField> entityFields = resolveEntityFields(dc, dfmFields, tableName);
+        String pkColumn = detectPkColumn(entityFields, tableName);
+
+        // Campos do Vo (excluindo PK que vai separado)
+        List<EntityField> voFields = new ArrayList<>();
+        for (EntityField ef : entityFields) {
+            if (ef.colName != null && !ef.colName.equals(pkColumn)) {
+                voFields.add(ef);
+            }
+        }
 
         StringBuilder sb = new StringBuilder();
-        sb.append("package ").append(packageName).append(".vo.").append(toLowerFirst(baseName)).append(";\n\n");
-        sb.append("import ").append(packageName).append(".entity.").append(entityClass).append(";\n\n");
+        sb.append("package ").append(packageName).append(".vo.").append(modulo).append(";\n\n");
+        sb.append("import logus.corporativo.api.lazyload.LazyLoadField;\n");
+        sb.append("import logusretail.manager.type.LogusDateTime;\n");
         sb.append("import java.io.Serializable;\n");
-        sb.append("import java.math.BigDecimal;\n");
-        sb.append("import java.util.Date;\n\n");
+        sb.append("import java.math.BigDecimal;\n\n");
 
         sb.append("public class ").append(voName).append(" implements Serializable {\n\n");
         sb.append("    private static final long serialVersionUID = 1L;\n\n");
-        sb.append("    private Integer id;\n");
 
-        // VO usa apenas campos visíveis (se veio do DFM)
-        List<String[]> fieldList = buildFieldList(dc, dfmFields, true);
-        for (String[] f : fieldList) {
-            sb.append("    private ").append(f[0]).append(" ").append(f[1]).append(";\n");
+        // ── Fields com @LazyLoadField ──
+        sb.append("    @LazyLoadField(entityField = { \"id\" })\n");
+        sb.append("    private Integer id;\n\n");
+
+        for (EntityField ef : voFields) {
+            // @LazyLoadField
+            if (ef.manyToOneEntity != null) {
+                sb.append("    @LazyLoadField(entityField = { \"").append(ef.javaName).append(".id\" })\n");
+            } else {
+                sb.append("    @LazyLoadField(entityField = { \"").append(ef.javaName).append("\" })\n");
+            }
+            // Tipo no Vo: datas viram String, FKs viram Integer, enums viram Integer+String
+            String voType = voFieldType(ef);
+            sb.append("    private ").append(voType).append(" ").append(ef.javaName).append(";\n\n");
         }
 
-        // Constructor from Entity
-        sb.append("\n    public ").append(voName).append("() { super(); }\n\n");
-        sb.append("    public ").append(voName).append("(final ").append(entityClass).append(" entity) {\n");
-        sb.append("        this.id = entity.getId();\n");
-        for (String[] f : fieldList) {
-            sb.append("        this.").append(f[1]).append(" = entity.get").append(capitalize(f[1])).append("();\n");
+        // ── Constructor all-args (para SELECT NEW) ──
+        sb.append("    public ").append(voName).append("() { super(); }\n\n");
+        sb.append("    public ").append(voName).append("(\n");
+        sb.append("            Integer id");
+        for (EntityField ef : voFields) {
+            String ctorType = ctorParamType(ef);
+            sb.append(",\n            ").append(ctorType).append(" ").append(ef.javaName);
+        }
+        sb.append(") {\n");
+        sb.append("        this.id = id;\n");
+        for (EntityField ef : voFields) {
+            if (ef.isDate) {
+                sb.append("        this.").append(ef.javaName).append(" = this.formatarData(").append(ef.javaName).append(");\n");
+            } else if (ef.manyToOneEntity != null) {
+                sb.append("        this.").append(ef.javaName).append(" = ").append(ef.javaName).append(";\n");
+            } else {
+                sb.append("        this.").append(ef.javaName).append(" = ").append(ef.javaName).append(";\n");
+            }
         }
         sb.append("    }\n\n");
 
-        // Getters & Setters
-        sb.append("    public Integer getId() { return id; }\n");
-        sb.append("    public void setId(Integer id) { this.id = id; }\n\n");
+        // ── Getters & Setters ──
+        sb.append("    public Integer getId() {\n        return this.id;\n    }\n\n");
+        sb.append("    public void setId(Integer id) {\n        this.id = id;\n    }\n\n");
 
-        for (String[] f : fieldList) {
-            String cap = capitalize(f[1]);
-            sb.append("    public ").append(f[0]).append(" get").append(cap).append("() { return ").append(f[1]).append("; }\n");
-            sb.append("    public void set").append(cap).append("(").append(f[0]).append(" ").append(f[1]).append(") { this.").append(f[1]).append(" = ").append(f[1]).append("; }\n\n");
+        for (EntityField ef : voFields) {
+            String voType = voFieldType(ef);
+            String cap = capitalize(ef.javaName);
+            sb.append("    public ").append(voType).append(" get").append(cap).append("() {\n");
+            sb.append("        return this.").append(ef.javaName).append(";\n    }\n\n");
+            sb.append("    public void set").append(cap).append("(").append(voType).append(" ").append(ef.javaName).append(") {\n");
+            sb.append("        this.").append(ef.javaName).append(" = ").append(ef.javaName).append(";\n    }\n\n");
         }
+
+        // ── formatarData helper ──
+        sb.append("    private String formatarData(LogusDateTime data) {\n");
+        sb.append("        return data == null ? null : data.toString(LogusDateTime.DATE_FORMAT);\n");
+        sb.append("    }\n");
 
         sb.append("}\n");
         return sb.toString();
+    }
+
+    /** Tipo do campo no GridVo: datas→String, FKs→Integer, enums→Integer, rest→original */
+    private String voFieldType(EntityField ef) {
+        if (ef.isDate) return "String";
+        if (ef.manyToOneEntity != null) return "Integer";
+        if (ef.isEnum) return "Integer";
+        return ef.javaType;
+    }
+
+    /** Tipo do parâmetro no constructor (recebido do SELECT NEW): datas→LogusDateTime, FKs→Integer */
+    private String ctorParamType(EntityField ef) {
+        if (ef.isDate) return "LogusDateTime";
+        if (ef.manyToOneEntity != null) return "Integer";
+        if (ef.isEnum) return "Integer";
+        return ef.javaType;
     }
 
     /** Monta lista de campos: primeiro tenta DelphiClass, se vazio usa dfmFields */
