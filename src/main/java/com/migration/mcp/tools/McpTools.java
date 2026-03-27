@@ -383,14 +383,25 @@ class GenerateJavaClassTool extends BaseTool {
                                     generator.generateEntity(dc, packageName, finalDfmFields, mainTable));
                         } else {
                             // Múltiplos datasets → 1 entity por dataset
-                            int sqlIdx = 0;
+                            // Coleta todas as tabelas das SQLs
+                            List<String> sqlTables = new ArrayList<>();
+                            for (SqlQuery sq : unit.getSqlQueries()) {
+                                if ("SELECT".equals(sq.getQueryType()) && sq.getTablesUsed() != null && !sq.getTablesUsed().isEmpty()) {
+                                    sqlTables.add(sq.getTablesUsed().get(0).toLowerCase());
+                                }
+                            }
+
+                            int dsIdx = 0;
                             for (Map.Entry<String, List<DfmForm.DatasetField>> entry : byDataset.entrySet()) {
                                 String dsName = entry.getKey();
                                 List<DfmForm.DatasetField> dsFields = entry.getValue();
-                                // Infere nome da entity: cdsPedido → PedidoAutomatico, cdsProdutos → ItemPedidoAutomatico
                                 String entityName = inferEntityName(dsName, cleanBase);
-                                String table = extractMainTable(unit.getSqlQueries(), sqlIdx++);
-                                // Fix 5: passa entityClassName para que a classe interna tenha o nome correto
+
+                                // Associar dataset à tabela: primeiro tenta knownTables pelo entityName,
+                                // senão usa a SQL na posição correspondente
+                                String table = findTableForEntity(entityName, sqlTables, dsIdx);
+                                dsIdx++;
+
                                 generatedFiles.put(entityName + "Entity.java",
                                         generator.generateEntity(dc, packageName, dsFields, table, entityName));
                             }
@@ -428,6 +439,46 @@ class GenerateJavaClassTool extends BaseTool {
                 if (count == index) return sq.getTablesUsed().get(0).toLowerCase();
                 count++;
             }
+        }
+        return null;
+    }
+
+    /** Encontra tabela para entity consultando knownTables, masterDetail e SQLs */
+    private String findTableForEntity(String entityName, List<String> sqlTables, int fallbackIdx) {
+        ProjectProfileStore store = ProjectProfileStore.getInstance();
+        TargetPatterns tp = store.getPatterns();
+
+        if (tp != null) {
+            // 1. Busca exata no knownTables pelo entityName
+            for (Map.Entry<String, TargetPatterns.TablePattern> e : tp.getKnownTables().entrySet()) {
+                if (e.getValue().getEntity() != null) {
+                    String eName = e.getValue().getEntity().replace("Entity", "");
+                    if (eName.equalsIgnoreCase(entityName)) {
+                        return e.getKey();
+                    }
+                }
+            }
+
+            // 2. Match parcial: "ManutencaoPedidoAutomatico" → procura entity que contenha "PedidoAutomatico"
+            boolean isItem = entityName.toLowerCase().startsWith("item");
+            for (Map.Entry<String, TargetPatterns.TablePattern> e : tp.getKnownTables().entrySet()) {
+                if (e.getValue().getEntity() != null) {
+                    String eName = e.getValue().getEntity().replace("Entity", "");
+                    boolean eIsItem = eName.toLowerCase().startsWith("item");
+                    // Match: ambos são item OU ambos são master
+                    if (isItem == eIsItem) {
+                        // Verifica se a tabela aparece nas SQLs extraídas
+                        if (sqlTables.contains(e.getKey())) {
+                            return e.getKey();
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Fallback: usa a SQL na posição correspondente
+        if (fallbackIdx < sqlTables.size()) {
+            return sqlTables.get(fallbackIdx);
         }
         return null;
     }
