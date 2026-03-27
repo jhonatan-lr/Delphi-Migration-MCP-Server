@@ -446,29 +446,29 @@ class GenerateJavaClassTool extends BaseTool {
     /**
      * Resolve quais entities gerar a partir das SQLs.
      * Retorna Map<tableName, entityClassName> com tabelas reais (não infra).
+     *
+     * Lógica: identifica a tabela principal da tela (primeira SQL SELECT) e só gera
+     * entities para ela e seus details (via masterDetailRelationships). Tabelas de
+     * SQLs auxiliares (lookups, subqueries) viram @ManyToOne, não entities separadas.
      */
     private Map<String, String> resolveEntityTables(List<SqlQuery> queries, TargetPatterns tp) {
-        Map<String, String> result = new LinkedHashMap<>();
+        // Passo 1: coletar todas as tabelas candidatas
+        Map<String, String> candidates = new LinkedHashMap<>();
         Set<String> seen = new HashSet<>();
 
         for (SqlQuery sq : queries) {
             if (sq.getTablesUsed() == null || sq.getTablesUsed().isEmpty()) continue;
 
-            // Fix 3: pegar a tabela de negócio do FROM (não necessariamente a primeira)
             String mainTable = findBusinessTable(sq.getTablesUsed(), sq.getSql());
             if (mainTable == null) continue;
 
-            // Filtrar: temporárias, já vistas
             if (mainTable.startsWith("tmp") || mainTable.equals("temp") || !seen.add(mainTable)) continue;
 
-            // Filtrar: tabelas de infraestrutura
             if (INFRA_TABLE_PREFIXES.contains(mainTable)) continue;
             if (mainTable.startsWith("cad") && !mainTable.contains("prop") && !mainTable.contains("solic")) continue;
 
-            // Fix 2: filtrar tabelas que só aparecem em subqueries
             if (isOnlyInSubquery(mainTable, sq.getSql())) continue;
 
-            // Resolver nome da entity
             String entityName;
             if (tp != null && tp.getKnownTables().containsKey(mainTable)) {
                 entityName = tp.getKnownTables().get(mainTable).getEntity();
@@ -477,10 +477,83 @@ class GenerateJavaClassTool extends BaseTool {
             }
 
             if (entityName != null) {
-                result.put(mainTable, entityName);
+                candidates.put(mainTable, entityName);
             }
         }
+
+        // Passo 2: filtrar — só manter a tabela principal + seus details
+        if (candidates.size() <= 1) return candidates;
+
+        Map<String, String> result = new LinkedHashMap<>();
+        // Tabela principal: prioriza estm* (master de negócio) sobre bdo*, mov*, etc.
+        String primaryTable = electPrimaryTable(candidates.keySet());
+        result.put(primaryTable, candidates.get(primaryTable));
+
+        // Incluir tabelas que são detail da principal (via masterDetailRelationships ou prefixo estd/estm)
+        String primaryPrefix = extractTablePrefix(primaryTable);
+        for (Map.Entry<String, String> e : candidates.entrySet()) {
+            String table = e.getKey();
+            if (table.equals(primaryTable)) continue;
+
+            // Detail via masterDetailRelationships
+            if (tp != null && tp.getMasterDetailRelationships().containsKey(table)) {
+                String master = tp.getMasterDetailRelationships().get(table).getMaster();
+                if (master != null && master.equals(primaryTable)) {
+                    result.put(table, e.getValue());
+                    continue;
+                }
+            }
+
+            // Detail por convenção: mesmo prefixo de negócio (estmpropcc → estdsoliccompracc)
+            // ou estd* com mesmo sufixo que estm*
+            if (primaryTable.startsWith("estm") && table.startsWith("estd")) {
+                result.put(table, e.getValue());
+                continue;
+            }
+            if (primaryTable.startsWith("estm") && table.startsWith("estm") && sharesSuffix(primaryTable, table)) {
+                result.put(table, e.getValue());
+                continue;
+            }
+
+            // Tabelas com mesmo prefixo de negócio (ex: estmpropcc e estmsoliccompracc ambas da feature)
+            if (primaryPrefix != null && table.startsWith(primaryPrefix)) {
+                result.put(table, e.getValue());
+            }
+        }
+
         return result;
+    }
+
+    /**
+     * Elege a tabela principal da tela entre as candidatas.
+     * Prioridade: estm* (master de negócio) > estd* > demais (bdo*, mov*, etc.)
+     * Se nenhuma estm/estd, usa a primeira candidata.
+     */
+    private String electPrimaryTable(Set<String> candidates) {
+        // Prioridade 1: estm* (master)
+        for (String t : candidates) {
+            if (t.startsWith("estm")) return t;
+        }
+        // Prioridade 2: qualquer tabela que não seja bdo/mov/log (auxiliares)
+        for (String t : candidates) {
+            if (!t.startsWith("bdo") && !t.startsWith("mov") && !t.startsWith("log")) return t;
+        }
+        // Fallback: primeira
+        return candidates.iterator().next();
+    }
+
+    /** Extrai o prefixo de módulo da tabela: estmpropcc → estm, bdoprpre → bdo */
+    private String extractTablePrefix(String tableName) {
+        if (tableName.startsWith("estm") || tableName.startsWith("estd")) return tableName.substring(0, 4);
+        if (tableName.matches("^(cad|bdo|mov|log|fis|fin|rec|pag|ctb|vnd|cmp).*")) return tableName.substring(0, 3);
+        return null;
+    }
+
+    /** Verifica se duas tabelas compartilham sufixo de negócio: estmpropcc e estmsoliccompracc → false */
+    private boolean sharesSuffix(String t1, String t2) {
+        String s1 = t1.length() > 4 ? t1.substring(4) : t1;
+        String s2 = t2.length() > 4 ? t2.substring(4) : t2;
+        return s1.equals(s2);
     }
 
     /** Fix 3: Encontra a tabela de negócio no FROM (a primeira que NÃO é infraestrutura) */
