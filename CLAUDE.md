@@ -1209,3 +1209,310 @@ Atalhos: Alt+N (novo), Alt+S (salvar), Alt+V (voltar)
 - `ask-obrigatorio` - asterisco de campo obrigatório (*)
 - `td-reticencias` - truncar texto em tabelas
 - `center` - centralizar texto
+
+---
+
+## Shared Components — API Completa
+
+### app-data-grid
+
+```html
+<app-data-grid
+  [(ngModel)]="listaGrid"
+  [columns]="colunas"
+  [widthAcoes]="10"
+  [totalRecords]="totalRegistros"
+  [paginacao]="true"
+  [exibeAcoes]="true"
+  (onLazyLoad)="loadLazy($event)">
+</app-data-grid>
+```
+
+- `[(ngModel)]` — `DataGridItem[]` (binding bidirecional)
+- `[columns]` — `DataGridColunasModel[]` com `{ field, header, width }` (width em %)
+- `[widthAcoes]` — largura da coluna de ações em % (padrão: 10)
+- `[totalRecords]` — total de registros para paginação
+- `[paginacao]` — habilita lazy loading (padrão: true)
+- `[exibeAcoes]` — mostra coluna de ações (padrão: true)
+- `(onLazyLoad)` — emite `LazyLoadEvent` do PrimeNG quando muda página/sort
+
+### app-button
+
+```html
+<app-button ngTypeButton="salvar" ngClass="float-right" (onClick)="salvar()"></app-button>
+<app-button ngTypeButton="voltar" ngClass="float-right" (onClick)="voltar()"></app-button>
+<app-button ngTypeButton="novo" ngClass="float-right" (onClick)="btnNovo()"></app-button>
+<app-button ngTypeButton="custom" textoCustom="Cancelar Pedido" customIcon="fa fa-ban"
+  [disabled]="!podeCancelar" (onClick)="btnCancelar()"></app-button>
+```
+
+- `ngTypeButton` — tipo do botão: `novo`, `salvar`, `voltar`, `excluir`, `pesquisar`, `cancelar`, `limpar`, `confirmar`, `imprimir`, `custom`
+- `ngClass` — classes CSS adicionais (`float-right`, `p-button-secondary`)
+- `[disabled]` — boolean para desabilitar
+- `textoCustom` — texto quando `ngTypeButton="custom"`
+- `customIcon` — ícone FontAwesome quando `ngTypeButton="custom"`
+- `(onClick)` — evento de clique
+
+### app-filtro
+
+```html
+<div [formGroup]="formGroup">
+  <app-filtro
+    (emmitPesquisar)="btnPesquisar()"
+    (emmitOnAfterToggle)="focusInFirstFilter()"
+    (keyup)="pesquisaEnter($event)">
+    <!-- campos de filtro aqui (content projection) -->
+  </app-filtro>
+</div>
+```
+
+- `(emmitPesquisar)` — emitido ao clicar no botão pesquisar interno
+- `(emmitOnAfterToggle)` — emitido após abrir/fechar o painel de filtros
+- Content projection: os campos de filtro são projetados como children
+
+### app-dropdown-multiselect
+
+```html
+<!-- Combo padrão (built-in) -->
+<app-dropdown-multiselect ngType="dropdown" ngConsulta="filial"
+  ngId="filialFiltro" formControlName="filialFiltro">
+</app-dropdown-multiselect>
+
+<!-- Combo customizado -->
+<app-dropdown-multiselect ngType="multiselect" ngConsulta="custom"
+  [listaCombo$]="situacoes$" ngId="situacao" formControlName="situacao"
+  [ngSelectAllItensPredefined]="true">
+</app-dropdown-multiselect>
+```
+
+- `ngType` — `"dropdown"` (single) ou `"multiselect"` (multi)
+- `ngConsulta` — `"filial"` (built-in), `"custom"` (com listaCombo$)
+- `[listaCombo$]` — `Observable<{label: string, value: number}[]>` quando ngConsulta="custom"
+- `[ngSelectAllItensPredefined]` — pré-seleciona todos os itens
+- `[ngPrimeiraOpcaoSelecionada]` — seleciona o primeiro item
+- `[desabilitado]` — desabilita o campo
+- `(onChange)` — evento ao mudar seleção
+- `(onLoaded)` — evento após carregar dados
+
+### app-calendar-basico
+
+```html
+<app-calendar-basico ngId="dataInicial" formControlName="dataInicial"
+  tooltipPosition="top" pTooltip="Data Inicial">
+</app-calendar-basico>
+```
+
+- `ngId` — id HTML do campo
+- `formControlName` — binding com reactive form
+- Suporta `pTooltip` e `tooltipPosition` do PrimeNG
+
+### app-validation-message
+
+```html
+<app-validation-message [validationMessage]="validationMessage"
+  [control]="formGroup.controls.campo">
+</app-validation-message>
+```
+
+- `[validationMessage]` — objeto `{ visibled: boolean, service: BaseValidacaoService }`
+- `[control]` — referência ao `AbstractControl` do campo
+
+### app-componente-basico
+
+```html
+<app-componente-basico
+  [exibirCarregando]="loading$ | async"
+  [erroModel]="erro"
+  [confirmDialog]="true"
+  [msg]="[]">
+</app-componente-basico>
+```
+
+- `[exibirCarregando]` — boolean para loading spinner
+- `[erroModel]` — objeto `Erro` para exibir mensagem de erro
+- `[confirmDialog]` — habilita dialog de confirmação global
+- `[msg]` — array de mensagens toast
+
+### app-botoes-exportar
+
+```html
+<app-botoes-exportar (exportarEmitter)="exportarGrid($event)">
+</app-botoes-exportar>
+```
+
+- `(exportarEmitter)` — emite string `"excel"` ou `"csv"`
+
+### app-report-button
+
+```html
+<app-report-button ngClass="p-button-secondary" class="float-right ml-2"
+  (emittClickPrincipal)="btnImprimir($event)">
+</app-report-button>
+```
+
+- `(emittClickPrincipal)` — emite string do tipo de arquivo (`"pdf"`, `"csv"`)
+
+### app-auto-complete-fornecedores
+
+```html
+<app-auto-complete-fornecedores ngId="codFornecedor"
+  formControlName="fornecedor">
+</app-auto-complete-fornecedores>
+```
+
+- Busca por CNPJ, CPF, Razão Social ou Nome Fantasia (mín. 3 chars)
+- Retorna `FornecedorComboModel { value: string, label: string, desabilitado: boolean }`
+- Extração: `this.formGroup.controls.fornecedor.value?.value`
+
+---
+
+## DataGridItem — Construção de itens da grid
+
+A `app-data-grid` recebe um array de `DataGridItem`. Cada item contém cells e callbacks:
+
+```typescript
+interface DataGridItem {
+  item: DataGridCell[];          // array de células
+  itemDesativado?: boolean;      // true = row cinza (registro inativo)
+  loadLazy?: (event: LazyLoadEvent) => void;
+  editar?: () => void;           // callback do botão editar
+  desativar?: () => void;        // callback do botão desativar
+  ativar?: () => void;           // callback do botão ativar
+  excluir?: () => void;          // callback do botão excluir
+  historico?: () => void;        // callback do botão histórico
+  detalhes?: () => void;         // callback do botão detalhes
+  exibirEdicao?: boolean;        // controla se mostra botão editar (padrão: true)
+  edicaoHabilitado?: boolean;    // controla se botão editar está habilitado
+}
+
+interface DataGridCell {
+  field: any;                    // valor da célula
+  tooltip?: string;              // tooltip ao hover
+  textAlign?: DataGridTextAlignEnum;  // center, left, right
+  statusAtivoInativo?: boolean;  // true = renderiza como badge ativo/inativo
+}
+```
+
+### Exemplo completo de buildDataGridItem
+
+```typescript
+private buildDataGridItem(model: PedidoAutomaticoModel): DataGridItem {
+  return {
+    item: [
+      { field: model.codigoPedido, tooltip: model.codigoPedido,
+        textAlign: DataGridTextAlignEnum.center },
+      { field: model.descricaoSecao, tooltip: model.descricaoSecao,
+        textAlign: DataGridTextAlignEnum.left },
+      { field: model.dataPedido, tooltip: model.dataPedido,
+        textAlign: DataGridTextAlignEnum.center },
+      { field: model.situacao, tooltip: model.situacao,
+        textAlign: DataGridTextAlignEnum.center,
+        statusAtivoInativo: true },
+    ],
+    itemDesativado: model.status != null,
+    loadLazy: (event: LazyLoadEvent) => this.loadLazy(event),
+    editar: () => this.btnAlterar(model),
+    desativar: () => this.btnDesativar(model),
+    historico: () => this.btnHistorico(model.id),
+  };
+}
+```
+
+### Ações condicionais na grid (botões dinâmicos)
+
+Para telas de monitor onde botões dependem do status do registro:
+
+```typescript
+// Cancelar só habilitado quando status permite
+private buildDataGridItem(model): DataGridItem {
+  const podeCancelar = model.situacao !== 'Cancelado';
+  const podeReativar = model.situacao === 'Cancelado' && !model.dataConfirmacao;
+  return {
+    item: [...],
+    // Botões condicionais via callbacks opcionais
+    desativar: podeCancelar ? () => this.btnCancelar(model) : undefined,
+    ativar: podeReativar ? () => this.btnReativar(model) : undefined,
+    editar: () => this.btnAlterar(model),
+    historico: () => this.btnHistorico(model.id),
+  };
+}
+```
+
+---
+
+## Padrão de Tela Monitor/Consulta (sem CRUD)
+
+Nem toda tela é CRUD. Telas de monitoramento têm padrões diferentes:
+
+### Diferenças em relação ao CRUD
+
+| Aspecto | CRUD padrão | Monitor/Consulta |
+|---|---|---|
+| Pages | `Inicio / Novo / Editar` | `Inicio` (ou `Inicio / Manutencao`) |
+| Cadastro | Componente cadastro próprio | Sub-tela via dialog/modal ou MakeShowModal |
+| Botões grid | Editar / Desativar / Histórico | Ações de negócio (Cancelar / Reativar / Liberar / Imprimir) |
+| Grid ações | Sempre visíveis | Condicionais (baseado em status do registro) |
+| Novo | Botão "Novo" cria inline | Botão "Novo" abre sub-tela |
+
+### Container (Monitor)
+
+```typescript
+// Apenas página Inicio — sem cadastro inline
+currentPage = MonitorPages.Inicio;
+
+// Ações são chamadas direto no Service
+btnCancelar(model): void {
+  this.confirmationService.confirm({
+    message: 'Deseja cancelar o pedido ' + model.codigoPedido + '?',
+    accept: () => this.service.handleCancelar(model.id)
+  });
+}
+
+btnNovo(): void {
+  // Abre sub-tela em vez de mudar para modo cadastro
+  const ref = this.dialogService.open(ManutencaoComponent, {
+    data: { codigoFilial: this.filialSelecionada },
+    header: 'Novo Pedido'
+  });
+  ref.onClose.subscribe(result => {
+    if (result) this.service.handlePesquisar(this.filtros);
+  });
+}
+```
+
+### Service (Monitor) — Diferenças
+
+```typescript
+// Ações de negócio em vez de CRUD save/delete
+handleCancelar(id: number): void {
+  this.loaderService.setLoading(true);
+  this.httpService.cancelar(id).pipe(first()).subscribe(
+    () => {
+      this.loaderService.setLoading(false);
+      this.sharedMessageService.showRegistroExcluidoMessage();
+      this.handlePesquisar(this.filtros);
+    },
+    (err) => this.erroDispacherService.setErro(err)
+  );
+}
+
+handleReativar(id: number): void { ... }
+handleLiberar(ids: number[]): void { ... }
+handleImprimir(id: number): void { ... }
+```
+
+### HTTP Service (Monitor) — Endpoints adicionais
+
+```typescript
+cancelar(id: number): Observable<any> {
+  return this.http.put<any>(`${URL_API}${URL}/cancelar/${id}`, null);
+}
+
+reativar(id: number): Observable<any> {
+  return this.http.put<any>(`${URL_API}${URL}/reativar/${id}`, null);
+}
+
+imprimir(id: number): Observable<Blob> {
+  return this.http.get(`${URL_API}${URL}/imprimir/${id}`, { responseType: 'blob' });
+}
+```
