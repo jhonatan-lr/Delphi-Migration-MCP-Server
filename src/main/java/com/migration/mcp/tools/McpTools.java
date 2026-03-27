@@ -453,15 +453,20 @@ class GenerateJavaClassTool extends BaseTool {
 
         for (SqlQuery sq : queries) {
             if (sq.getTablesUsed() == null || sq.getTablesUsed().isEmpty()) continue;
-            String mainTable = sq.getTablesUsed().get(0).toLowerCase();
 
-            // Filtrar: temporárias, subqueries, já vistas
+            // Fix 3: pegar a tabela de negócio do FROM (não necessariamente a primeira)
+            String mainTable = findBusinessTable(sq.getTablesUsed(), sq.getSql());
+            if (mainTable == null) continue;
+
+            // Filtrar: temporárias, já vistas
             if (mainTable.startsWith("tmp") || mainTable.equals("temp") || !seen.add(mainTable)) continue;
 
-            // Filtrar: tabelas de infraestrutura (cadastros base)
+            // Filtrar: tabelas de infraestrutura
             if (INFRA_TABLE_PREFIXES.contains(mainTable)) continue;
-            // Heurística extra: tabelas cad* que não são a tela principal
             if (mainTable.startsWith("cad") && !mainTable.contains("prop") && !mainTable.contains("solic")) continue;
+
+            // Fix 2: filtrar tabelas que só aparecem em subqueries
+            if (isOnlyInSubquery(mainTable, sq.getSql())) continue;
 
             // Resolver nome da entity
             String entityName;
@@ -476,6 +481,32 @@ class GenerateJavaClassTool extends BaseTool {
             }
         }
         return result;
+    }
+
+    /** Fix 3: Encontra a tabela de negócio no FROM (a primeira que NÃO é infraestrutura) */
+    private String findBusinessTable(List<String> tablesUsed, String sql) {
+        // Tenta encontrar tabela não-infra na lista
+        for (String t : tablesUsed) {
+            String lower = t.toLowerCase();
+            if (!INFRA_TABLE_PREFIXES.contains(lower) &&
+                !(lower.startsWith("cad") && !lower.contains("prop") && !lower.contains("solic"))) {
+                return lower;
+            }
+        }
+        // Se todas são infra, retorna a primeira
+        return tablesUsed.isEmpty() ? null : tablesUsed.get(0).toLowerCase();
+    }
+
+    /** Fix 2: Verifica se a tabela só aparece dentro de parênteses (subquery) */
+    private boolean isOnlyInSubquery(String tableName, String sql) {
+        if (sql == null) return false;
+        String lower = sql.toLowerCase();
+        // Remove conteúdo entre parênteses (simplificado: 1 nível)
+        String withoutParens = lower.replaceAll("\\([^)]*\\)", " __SUB__ ");
+        // Verifica se a tabela aparece no SQL sem parênteses
+        return !withoutParens.contains(" " + tableName + " ") &&
+               !withoutParens.contains(" " + tableName + ",") &&
+               !withoutParens.startsWith(tableName + " ");
     }
 
     /** Infere nome de entity a partir do nome da tabela: estmpropcc → PropostaCCEntity */

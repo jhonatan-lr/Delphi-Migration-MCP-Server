@@ -247,7 +247,9 @@ public class JavaCodeGenerator {
         // Tenta do DelphiClass primeiro
         for (DelphiField f : dc.getFields()) {
             if (f.isComponent()) continue;
-            EntityField ef = mapToEntityField(f.getName().toLowerCase(), f.getJavaType());
+            String colName = f.getName().toLowerCase();
+            if (isCampoDeTela(colName)) continue; // Fix 1: filtrar campos de tela
+            EntityField ef = mapToEntityField(colName, f.getJavaType());
             if (ef != null && !ef.javaName.equals("id") && !ef.javaName.isEmpty()) {
                 addOrReplace(byJavaName, ef);
             }
@@ -256,6 +258,7 @@ public class JavaCodeGenerator {
         // Fallback: DFM fields
         if (byJavaName.isEmpty() && dfmFields != null) {
             for (DfmForm.DatasetField df : dfmFields) {
+                if (isCampoDeTela(df.getName())) continue; // Fix 1: filtrar campos de tela
                 EntityField ef = mapToEntityField(df.getName(), df.getDelphiType());
                 if (ef != null && !ef.javaName.equals("id") && !ef.javaName.isEmpty()) {
                     addOrReplace(byJavaName, ef);
@@ -276,6 +279,20 @@ public class JavaCodeGenerator {
     /** Retorna o TargetPatterns carregado (ou null) */
     private TargetPatterns patterns() {
         return ProjectProfileStore.getInstance().getPatterns();
+    }
+
+    /** Verifica se o campo é de tela (calculado) e não uma coluna real do banco */
+    private boolean isCampoDeTela(String colName) {
+        if (colName == null) return true;
+        // Campos com prefixo padrão do banco são reais
+        if (colName.matches("^(cdg_|dat_|nmr_|dcr_|qtd_|val_|pct_|flb_|flg_|sgl_|hor_|id).*")) {
+            return false;
+        }
+        // Campos que começam com nome de dataset (selecao*, produtos*, display*) são calculados
+        if (colName.matches("^(selecao|produtos|display|consulta|filtro|combo|lista|detalhe).*")) {
+            return true;
+        }
+        return false; // caso duvidoso: manter
     }
 
     /** Mapeia um campo Delphi para EntityField com nome descritivo e tipo correto */
