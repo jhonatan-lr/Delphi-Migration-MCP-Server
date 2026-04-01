@@ -1585,10 +1585,14 @@ public class DelphiSourceParser {
             String condition  = em.group(2).trim();
             // Skip simple boolean literals — those are initial states already handled elsewhere
             if (condition.equalsIgnoreCase("true") || condition.equalsIgnoreCase("false")) continue;
-            // Only capture button-like components (bbt, btn, sbt, bit, pbt prefixes)
+            // Accept button components AND common input/visual components that have Enabled logic
             String lower = buttonName.toLowerCase();
             if (!lower.startsWith("bbt") && !lower.startsWith("btn") && !lower.startsWith("sbt") &&
-                !lower.startsWith("bit") && !lower.startsWith("pbt") && !lower.contains("button")) continue;
+                !lower.startsWith("bit") && !lower.startsWith("pbt") && !lower.startsWith("edt") &&
+                !lower.startsWith("chk") && !lower.startsWith("cbb") && !lower.startsWith("dtp") &&
+                !lower.startsWith("grp") && !lower.startsWith("pnl") && !lower.startsWith("luc") &&
+                !lower.startsWith("grd") && !lower.startsWith("dbg") &&
+                !lower.contains("button") && !lower.contains("edit") && !lower.contains("combo")) continue;
 
             ButtonStateRule rule = ruleMap.computeIfAbsent(buttonName.toLowerCase(),
                 k -> { ButtonStateRule r = new ButtonStateRule(); r.setButtonName(buttonName); return r; });
