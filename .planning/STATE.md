@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-last_updated: "2026-04-01T20:12:00.000Z"
+last_updated: "2026-04-01T19:31:21.062Z"
 last_activity: 2026-04-01
 progress:
-  total_phases: 2
-  completed_phases: 0
+  total_phases: 1
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -19,11 +19,11 @@ progress:
 
 ## Current Phase
 
-Phase 2 — Parser gaps round 3 (plans 02-01 and 02-02 complete, plan 02-03 pending)
+Phase 2 — Parser gaps round 3 — ALL PLANS COMPLETE (02-01, 02-02, 02-03)
 
 ## Stopped At
 
-Completed 02-parser-gaps-round3/02-02-PLAN.md
+Completed 02-parser-gaps-round3/02-03-PLAN.md
 
 ## Blockers/Concerns
 
@@ -39,6 +39,9 @@ None
 - **02-parser-gaps-round3/02-02:** ABrush.Color detection added to all three CalcCellColors regex paths (casePat, ifColorPat, ifAColorPat) with bg- cssClass prefix
 - **02-parser-gaps-round3/02-02:** isConexaoPattern boolean detects Conexao-prefixed transactions vs generic StartTransaction pattern
 - **02-parser-gaps-round3/02-02:** Duplicate op guard added to avoid repeated entries in transaction operations list
+- [Phase 02-parser-gaps-round3]: case...of branch splits produce N separate SqlFragments (base SQL + each branch SQL) instead of one concatenated invalid query
+- [Phase 02-parser-gaps-round3]: Method param exclusion: strip procedure/function signatures via replaceAll, then filter eventParams Set for event handler param names
+- [Phase 02-parser-gaps-round3]: ParamByName params stored as List<Map<String,String>> on SqlQuery with name/javaType/delphiAsType/bindExpression; dedup via seenParamNames HashSet
 
 ### Roadmap Evolution
 
