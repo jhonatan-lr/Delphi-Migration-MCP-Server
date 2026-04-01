@@ -1566,7 +1566,14 @@ public class DelphiSourceParser {
             ButtonStateRule rule = ruleMap.computeIfAbsent(buttonName.toLowerCase(),
                     k -> { ButtonStateRule r = new ButtonStateRule(); r.setButtonName(buttonName); return r; });
             if (rule.getDataset() == null) rule.setDataset(dataset);
-            rule.setEnableConditionRaw(condition);
+            String existingRaw1 = rule.getEnableConditionRaw();
+            if (existingRaw1 != null && !existingRaw1.isBlank()) {
+                if (!existingRaw1.toLowerCase().contains(condition.toLowerCase().replaceAll("\\s+", " ").trim())) {
+                    rule.setEnableConditionRaw(existingRaw1 + " and " + condition);
+                }
+            } else {
+                rule.setEnableConditionRaw(condition);
+            }
             parseEnableConditions(condition, rule);
 
             Matcher fm = Pattern.compile("(?i)FieldByName\\s*\\(\\s*'([^']+)'\\s*\\)").matcher(body);
@@ -1611,7 +1618,14 @@ public class DelphiSourceParser {
             ButtonStateRule rule = ruleMap.computeIfAbsent(buttonName.toLowerCase(),
                 k -> { ButtonStateRule r = new ButtonStateRule(); r.setButtonName(buttonName); return r; });
             if (rule.getDataset() == null) rule.setDataset(dataset);
-            rule.setEnableConditionRaw(condition);
+            String existingRaw2 = rule.getEnableConditionRaw();
+            if (existingRaw2 != null && !existingRaw2.isBlank()) {
+                if (!existingRaw2.toLowerCase().contains(condition.toLowerCase().replaceAll("\\s+", " ").trim())) {
+                    rule.setEnableConditionRaw(existingRaw2 + " and " + condition);
+                }
+            } else {
+                rule.setEnableConditionRaw(condition);
+            }
             parseEnableConditions(condition, rule);
         }
     }
@@ -1809,7 +1823,12 @@ public class DelphiSourceParser {
         for (String part : parts) {
             String trimmed = part.trim().replaceAll("^\\(+|\\)+$", "").trim();
             if (!trimmed.isEmpty() && trimmed.length() > 2) {
-                rule.getEnableConditions().add(trimmed);
+                // Dedup: check if this condition (case-insensitive) is already in the list
+                boolean alreadyExists = rule.getEnableConditions().stream()
+                        .anyMatch(existing -> existing.equalsIgnoreCase(trimmed));
+                if (!alreadyExists) {
+                    rule.getEnableConditions().add(trimmed);
+                }
             }
         }
     }
