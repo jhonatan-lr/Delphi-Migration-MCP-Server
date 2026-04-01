@@ -220,10 +220,20 @@ public class DelphiSourceParser {
         // Extrai secção private/protected/public
         Pattern section = Pattern.compile("(?i)(?:private|protected|public|published)\\s*([\\s\\S]*?)(?=(?:private|protected|public|published|end\\b)|$)");
         Matcher sm = section.matcher(block);
+        // Nomes típicos de parâmetros de eventos Delphi — não são campos da classe
+        java.util.Set<String> eventParamNames = java.util.Set.of(
+            "sender", "acolumn", "abrush", "afont", "afield", "arow", "acol",
+            "acell", "state", "field", "column", "key", "button", "x", "y",
+            "shift", "datalink", "avalue", "atext", "adisplayed"
+        );
         while (sm.find()) {
-            Matcher fm = FIELD_PATTERN.matcher(sm.group(1));
+            // Remove assinaturas de procedure/function para evitar capturar seus parâmetros como fields
+            String sectionContent = sm.group(1).replaceAll(
+                "(?i)(procedure|function)\\s+\\w+\\s*\\([^)]*\\)\\s*(?::\\s*\\w+)?\\s*;", "");
+            Matcher fm = FIELD_PATTERN.matcher(sectionContent);
             while (fm.find()) {
                 if (isReservedWord(fm.group(1))) continue;
+                if (eventParamNames.contains(fm.group(1).toLowerCase())) continue;
                 DelphiField f = new DelphiField();
                 f.setName(fm.group(1));
                 f.setDelphiType(fm.group(2));
@@ -458,6 +468,8 @@ public class DelphiSourceParser {
         // Padrão: SQL.Add(A) ... end ... else ... begin ... SQL.Add(B)
         // Aceita qualquer conteúdo entre end e else (pode ter ParamByName, comentários, etc.)
         Pattern elsePattern = Pattern.compile("(?si)\\bend\\b.*?\\belse\\b.*?\\bbegin\\b");
+        // Detecta branches de case...of: end; N: begin (ou end; N: sem begin para case inline)
+        Pattern caseOfPattern = Pattern.compile("(?si)\\bend\\b[\\s;]*\\d+\\s*:");
 
         // Encontra pontos de corte (posições de end/else/begin entre SQL.Adds)
         List<Integer> branchCuts = new ArrayList<>();
@@ -465,7 +477,7 @@ public class DelphiSourceParser {
             int gapStart = addPositions.get(i)[1];
             int gapEnd = addPositions.get(i + 1)[0];
             String gap = range.substring(gapStart, gapEnd);
-            if (elsePattern.matcher(gap).find()) {
+            if (elsePattern.matcher(gap).find() || caseOfPattern.matcher(gap).find()) {
                 branchCuts.add(i + 1);
             }
         }
@@ -750,9 +762,11 @@ public class DelphiSourceParser {
         Matcher paramM = Pattern.compile(":(\\w+)").matcher(q.getSql() != null ? q.getSql() : "");
         while (paramM.find()) sqlParams.add(paramM.group(1).toLowerCase());
 
+        java.util.Set<String> seenParamNames = new java.util.HashSet<>();
         Matcher m = PARAM_BY_NAME_PATTERN.matcher(range);
         while (m.find()) {
             String name = m.group(1);
+            if (!seenParamNames.add(name.toLowerCase())) continue; // dedup: same param in case branches
             String asType = m.group(2); // AsInteger, AsString, AsDate, etc.
             String bindExpr = m.group(3).trim();
             String javaType = mapDelphiParamType(asType);
