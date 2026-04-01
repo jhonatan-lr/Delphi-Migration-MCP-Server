@@ -1436,18 +1436,31 @@ public class DelphiSourceParser {
             init.getInitialStates().add(is);
         }
 
-        // Padrão 2: TLogusWinControl.EnableComponent(campo, condição)
-        Pattern enablePattern = Pattern.compile(
-                "(?i)TLogusWinControl\\.EnableComponent\\s*\\(\\s*(\\w+)\\s*(?:,\\s*([^)]+))?\\)");
-        Matcher m2 = enablePattern.matcher(body);
+        // Padrão 2: TLogusWinControl.EnableComponent(campo, condicao) — handles compound boolean expressions
+        Pattern enableStartPat = Pattern.compile("(?i)TLogusWinControl\\.EnableComponent\\s*\\(");
+        Matcher m2 = enableStartPat.matcher(body);
         while (m2.find()) {
             if (isInRange(m2.start(), conditionalRanges)) continue;
 
+            int openParen = m2.end() - 1;
+            String args = extractBalancedParens(body, openParen);
+            if (args == null) continue;
+
+            int firstComma = findTopLevelComma(args);
+            String component;
+            String condition = null;
+            if (firstComma >= 0) {
+                component = args.substring(0, firstComma).trim();
+                condition = args.substring(firstComma + 1).trim();
+            } else {
+                component = args.trim();
+            }
+
             FormInitialization.InitialState is = new FormInitialization.InitialState();
-            is.setComponent(m2.group(1));
+            is.setComponent(component);
             is.setState("enabled");
-            if (m2.group(2) != null) is.setCondition(m2.group(2).trim());
-            is.setDescription(m2.group(1) + " habilitado" + (m2.group(2) != null ? " quando " + m2.group(2).trim() : ""));
+            if (condition != null) is.setCondition(condition);
+            is.setDescription(component + " habilitado" + (condition != null ? " quando " + condition : ""));
             is.setMigration("Controlar com [disabled] binding condicional no template");
             init.getInitialStates().add(is);
         }
