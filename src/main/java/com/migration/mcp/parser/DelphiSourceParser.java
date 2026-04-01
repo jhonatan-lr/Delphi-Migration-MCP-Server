@@ -2139,38 +2139,43 @@ public class DelphiSourceParser {
                 rule.setConditionField(fieldM.group(1));
             }
 
-            // Detecta case/of com cores: N: AColor := clXxx ou N: AFont.Color := clXxx
-            Pattern casePat = Pattern.compile("(?i)(\\d+)\\s*:\\s*(?:AColor|AFont\\.Color)\\s*:=\\s*(cl\\w+)");
+            // Detecta case/of com cores: N: AColor := clXxx, N: ABrush.Color := clXxx ou N: AFont.Color := clXxx
+            Pattern casePat = Pattern.compile("(?i)(\\d+)\\s*:\\s*(?:AColor|ABrush\\.Color|AFont\\.Color)\\s*:=\\s*(cl\\w+)");
             Matcher cm = casePat.matcher(body);
             while (cm.find()) {
                 String value = cm.group(1);
                 String delphiColor = cm.group(2);
                 String cssColor = mapDelphiColor(delphiColor);
-                String cssClass = "text-" + cssColor;
+                boolean isBackground = cm.group(0).toLowerCase().contains("abrush");
+                String cssClass = isBackground ? "bg-" + cssColor : "text-" + cssColor;
                 rule.getColorMappings().add(new CalcCellColorRule.ColorMapping(value, cssColor, cssClass, null));
             }
 
-            // Detecta if/then com cores: if (campo = N) then AColor := clXxx ou AFont.Color := clXxx
-            Pattern ifColorPat = Pattern.compile("(?i)(?:=\\s*(\\d+)|'([^']+)')\\s*(?:then|:)\\s*[\\s\\S]*?(?:AColor|AFont\\.Color)\\s*:=\\s*(cl\\w+)");
+            // Detecta if/then com cores: if (campo = N) then AColor := clXxx, ABrush.Color := clXxx ou AFont.Color := clXxx
+            Pattern ifColorPat = Pattern.compile("(?i)(?:=\\s*(\\d+)|'([^']+)')\\s*(?:then|:)\\s*[\\s\\S]*?(?:AColor|ABrush\\.Color|AFont\\.Color)\\s*:=\\s*(cl\\w+)");
             if (rule.getColorMappings().isEmpty()) {
                 Matcher icm = ifColorPat.matcher(body);
                 while (icm.find()) {
                     String value = icm.group(1) != null ? icm.group(1) : icm.group(2);
                     String delphiColor = icm.group(3);
                     String cssColor = mapDelphiColor(delphiColor);
-                    rule.getColorMappings().add(new CalcCellColorRule.ColorMapping(value, cssColor, "text-" + cssColor, null));
+                    boolean isBackground = icm.group(0).toLowerCase().contains("abrush");
+                    String cssClass = isBackground ? "bg-" + cssColor : "text-" + cssColor;
+                    rule.getColorMappings().add(new CalcCellColorRule.ColorMapping(value, cssColor, cssClass, null));
                 }
             }
 
-            // Fallback: if (...AsInteger = N) then AColor := clXxx (sem FieldByName no mesmo if)
+            // Fallback: if (...AsInteger = N) then AColor := clXxx, ABrush.Color := clXxx (sem FieldByName no mesmo if)
             if (rule.getColorMappings().isEmpty()) {
                 Pattern ifAColorPat = Pattern.compile(
-                    "(?i)if\\s+[^;]+?(?:AsInteger|AsString)\\s*(?:<>|=)\\s*(\\d+|'[^']+')\\s+then[^;]*?(?:AColor|AFont\\.Color)\\s*:=\\s*(cl\\w+)");
+                    "(?i)if\\s+[^;]+?(?:AsInteger|AsString)\\s*(?:<>|=)\\s*(\\d+|'[^']+')\\s+then[^;]*?(?:AColor|ABrush\\.Color|AFont\\.Color)\\s*:=\\s*(cl\\w+)");
                 Matcher iam = ifAColorPat.matcher(body);
                 while (iam.find()) {
                     String value = iam.group(1).replace("'", "");
                     String cssColor = mapDelphiColor(iam.group(2));
-                    rule.getColorMappings().add(new CalcCellColorRule.ColorMapping(value, cssColor, "text-" + cssColor, null));
+                    boolean isBackground = iam.group(0).toLowerCase().contains("abrush");
+                    String cssClass = isBackground ? "bg-" + cssColor : "text-" + cssColor;
+                    rule.getColorMappings().add(new CalcCellColorRule.ColorMapping(value, cssColor, cssClass, null));
                 }
             }
 
