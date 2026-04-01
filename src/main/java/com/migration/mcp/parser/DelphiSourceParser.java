@@ -2537,11 +2537,35 @@ public class DelphiSourceParser {
             TransactionBoundary tx = new TransactionBoundary();
             tx.setMethod(methodName);
 
-            // Extrai operações dentro da transação: ApplyUpdates, ExecSQL, comandos de negócio
-            Pattern opPat = Pattern.compile("(?i)(\\w+\\.(?:ApplyUpdates|ExecSQL|ExecProc|Execute|Cancelar|Reativar|Salvar|Gravar|Excluir|GravarLog)\\s*(?:\\([^)]*\\))?)");
+            // Detecta padrão Conexao-prefixado: Conexao.StartTransaction / Conexao.Commit / Conexao.Rollback
+            boolean isConexaoPattern = body.toLowerCase().contains("conexao.starttransaction") ||
+                                      body.toLowerCase().contains("conexao.commit");
+
+            // Extrai operações dentro da transação: ApplyUpdates, ExecSQL, comandos de negócio e dataset operations
+            Pattern opPat = Pattern.compile("(?i)(\\w+\\.(?:ApplyUpdates|ExecSQL|ExecProc|Execute|Cancelar|Reativar|Salvar|Gravar|Excluir|GravarLog|Post|Delete|Insert|Edit|Append)\\s*(?:\\([^)]*\\))?)");
             Matcher om = opPat.matcher(body);
             while (om.find()) {
-                tx.getOperations().add(om.group(1).trim());
+                String op = om.group(1).trim();
+                if (!tx.getOperations().contains(op)) {
+                    tx.getOperations().add(op);
+                }
+            }
+
+            // Fallback: captura operações de dataset (Post, Delete, Insert) se lista ainda vazia
+            if (tx.getOperations().isEmpty()) {
+                Pattern datasetOpPat = Pattern.compile("(?i)(\\w+\\.(?:Post|Delete|Insert|Append|Edit)\\b)");
+                Matcher dom = datasetOpPat.matcher(body);
+                while (dom.find()) {
+                    String op = dom.group(1).trim();
+                    if (!tx.getOperations().contains(op)) {
+                        tx.getOperations().add(op);
+                    }
+                }
+            }
+
+            // Marcador genérico para padrão Conexao quando nenhuma operação específica foi detectada
+            if (tx.getOperations().isEmpty() && isConexaoPattern) {
+                tx.getOperations().add("Conexao.Transaction (operacoes internas)");
             }
 
             // Detecta rollback explícito
@@ -2556,7 +2580,11 @@ public class DelphiSourceParser {
             }
 
             if (!tx.getOperations().isEmpty()) {
-                tx.setMigration("@Transactional no Service — todas as operações na mesma transação JPA");
+                String migration = "@Transactional no Service — todas as operações na mesma transação JPA";
+                if (isConexaoPattern) {
+                    migration = "@Transactional no Service — Conexao.StartTransaction/Commit/Rollback mapeia para Spring @Transactional";
+                }
+                tx.setMigration(migration);
                 rules.add(tx);
             }
         }
