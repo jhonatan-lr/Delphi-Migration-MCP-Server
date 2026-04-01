@@ -2725,7 +2725,24 @@ public class DelphiSourceParser {
                 }
                 checks.add(new String[]{datasetVar, cm.group(2)});
             }
-            if (checks.isEmpty()) continue;
+            // Pattern 2: vContinua := False + TLogusMessage.Warning/ShowMessage
+            // Matches: if (condition) then begin vContinua := False; TLogusMessage.Warning('msg'); end;
+            List<String[]> continuaChecks = new ArrayList<>();
+            Pattern continuaPat = Pattern.compile(
+                "(?i)if\\s+(.{5,200}?)\\s+then\\s*(?:begin)?[\\s\\S]{0,100}?v(?:Continua|Result|Retorno)\\s*:=\\s*(?:False|false)[\\s\\S]{0,100}?(?:TLogusMessage\\.Warning|ShowMessage)\\s*\\(\\s*'([^']+)'",
+                Pattern.DOTALL);
+            Matcher contM = continuaPat.matcher(body);
+            while (contM.find()) {
+                String condition = contM.group(1).trim().replaceAll("\\s+", " ");
+                String message = contM.group(2);
+                // Avoid duplicating checks already found by the IsEmpty pattern
+                boolean alreadyFound = checks.stream().anyMatch(c -> c[1].equals(message));
+                if (!alreadyFound) {
+                    continuaChecks.add(new String[]{condition, message});
+                }
+            }
+
+            if (checks.isEmpty() && continuaChecks.isEmpty()) continue;
 
             // Emit one guard_validation rule per check pair (US2: each pair is a distinct rule)
             for (int i = 0; i < checks.size(); i++) {
@@ -2746,32 +2763,64 @@ public class DelphiSourceParser {
                 rules.add(guard);
             }
 
+            // Emit vContinua-based guard_validation rules
+            for (String[] check : continuaChecks) {
+                String condition = check[0];
+                String message = check[1];
+                BusinessRule guard = new BusinessRule();
+                guard.setRuleType("guard_validation");
+                guard.setDescription("Guard validation (" + methodName + "): '" + message + "'");
+                guard.setSourceCode("if " + condition + " then vContinua := False; Warning('" + message + "')");
+                guard.setComplexity("medium");
+                guard.setMigrationStrategy(
+                    "Criar verificação no Service. " +
+                    "Lançar ValidationException(\"" + message + "\") antes de prosseguir.");
+                guard.setSuggestedJavaCode(
+                    "// Guard: " + condition + "\n" +
+                    "if (conditionMet) {\n" +
+                    "    throw new ValidationException(\"" + message + "\");\n" +
+                    "}");
+                rules.add(guard);
+            }
+
             // Also emit grouped cascade_validation summary when there are 2+ checks (backward compat)
-            if (checks.size() >= 2) {
+            int totalChecks = checks.size() + continuaChecks.size();
+            if (totalChecks >= 2) {
                 StringBuilder desc = new StringBuilder();
                 desc.append("Validação em cascata em ").append(methodName)
-                    .append(": ").append(checks.size()).append(" verificações sequenciais — ");
+                    .append(": ").append(totalChecks).append(" verificações sequenciais — ");
                 for (int i = 0; i < checks.size(); i++) {
                     if (i > 0) desc.append(" | ");
                     desc.append(checks.get(i)[1]);
                 }
+                for (int i = 0; i < continuaChecks.size(); i++) {
+                    if (i > 0 || !checks.isEmpty()) desc.append(" | ");
+                    desc.append(continuaChecks.get(i)[1]);
+                }
 
                 StringBuilder javaCode = new StringBuilder();
                 javaCode.append("// Validações em cascata — ").append(methodName).append("\n");
+                int idx = 1;
                 for (int i = 0; i < checks.size(); i++) {
-                    javaCode.append("// Verificação ").append(i + 1).append("\n");
+                    javaCode.append("// Verificação ").append(idx++).append("\n");
                     javaCode.append("if (").append(snakeToCamel(checks.get(i)[0])).append("Repository.existsRelated(id)) {\n");
                     javaCode.append("    throw new ValidationException(\"").append(checks.get(i)[1]).append("\");\n");
+                    javaCode.append("}\n");
+                }
+                for (int i = 0; i < continuaChecks.size(); i++) {
+                    javaCode.append("// Verificação ").append(idx++).append(" (vContinua guard)\n");
+                    javaCode.append("if (conditionMet) {\n");
+                    javaCode.append("    throw new ValidationException(\"").append(continuaChecks.get(i)[1]).append("\");\n");
                     javaCode.append("}\n");
                 }
 
                 BusinessRule summary = new BusinessRule();
                 summary.setRuleType("cascade_validation");
                 summary.setDescription(desc.toString());
-                summary.setSourceCode("cascade:" + methodName + ":" + checks.size() + "_checks");
+                summary.setSourceCode("cascade:" + methodName + ":" + totalChecks + "_checks");
                 summary.setComplexity("high");
                 summary.setMigrationStrategy(
-                    "Criar " + checks.size() + " métodos de verificação no Service/Repository. " +
+                    "Criar " + totalChecks + " métodos de verificação no Service/Repository. " +
                     "Cada um lança ValidationException com a mensagem original antes de prosseguir.");
                 summary.setSuggestedJavaCode(javaCode.toString());
                 rules.add(summary);
