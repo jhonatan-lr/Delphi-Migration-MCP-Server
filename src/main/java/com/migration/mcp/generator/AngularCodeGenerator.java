@@ -747,10 +747,10 @@ public class AngularCodeGenerator {
                 return e.getValue();
             }
         }
-        // Fallback: humaniza nome do componente (edtCodigoFornecedorDisplay → Código Fornecedor)
-        String caption = comp.getProperties().getOrDefault("Caption",
-               comp.getProperties().getOrDefault("Hint", null));
-        if (caption != null && !caption.equals(comp.getName())) return caption;
+        // Fallback: Caption do próprio componente (ex: TCheckBox tem Caption)
+        // Não usar Hint — é texto de tooltip, não label de campo
+        String caption = comp.getProperties().get("Caption");
+        if (caption != null && !caption.isBlank() && !caption.equals(comp.getName())) return caption;
         return humanizeComponentName(comp.getName());
     }
 
@@ -788,51 +788,68 @@ public class AngularCodeGenerator {
             formControls.append("],\n");
         }
 
-        return "import { Component, OnInit, OnDestroy } from '@angular/core';\n" +
+        return "import { Component, ChangeDetectionStrategy, OnInit, OnDestroy } from '@angular/core';\n" +
                "import { FormBuilder, FormGroup, Validators } from '@angular/forms';\n" +
-               "import { Subject } from 'rxjs';\n" +
-               "import { takeUntil } from 'rxjs/operators';\n" +
+               "import { SharedMessageService } from '@shared/services/shared-message.service';\n" +
+               "import { ValidationMessage } from '@shared/validation-message/validation-message';\n" +
+               "import { BaseValidacaoService } from 'app/common/utils/base/base-validacao.service';\n" +
+               "import { " + pascal + "Pages } from '../../models/" + kebab + ".pages';\n" +
                "import { " + pascal + "Service } from '../../services/" + kebab + ".service';\n" +
-               "import { " + pascal + "Model } from '../../models/" + kebab + ".model';\n\n" +
+               "import { " + pascal + "Model } from '../../models/" + kebab + ".model';\n" +
+               "import { Subscription } from 'rxjs';\n" +
+               "import { tap } from 'rxjs/operators';\n\n" +
                "@Component({\n" +
                "  selector: 'app-" + kebab + "-cadastro',\n" +
-               "  templateUrl: './" + kebab + "-cadastro.component.html'\n" +
+               "  templateUrl: './" + kebab + "-cadastro.component.html',\n" +
+               "  changeDetection: ChangeDetectionStrategy.OnPush\n" +
                "})\n" +
                "export class " + pascal + "CadastroComponent implements OnInit, OnDestroy {\n\n" +
-               "  form: FormGroup;\n" +
-               "  isEdicao = false;\n\n" +
-               "  private destroy$ = new Subject<void>();\n\n" +
+               "  private subscription: Subscription;\n\n" +
+               "  isEdicao: boolean = false;\n" +
+               "  validationMessage: ValidationMessage;\n" +
+               "  formGroup: FormGroup;\n\n" +
                "  constructor(\n" +
-               "    private fb: FormBuilder,\n" +
-               "    private service: " + pascal + "Service\n" +
+               "    private service: " + pascal + "Service,\n" +
+               "    private baseValidacaoService: BaseValidacaoService,\n" +
+               "    private sharedMessageService: SharedMessageService,\n" +
+               "    private formBuilder: FormBuilder\n" +
                "  ) {\n" +
-               "    this.form = this.fb.group({\n" +
+               "    this.validationMessage = { visibled: false, service: this.baseValidacaoService };\n" +
+               "  }\n\n" +
+               "  public ngOnInit(): void {\n" +
+               "    this.formGroup = this.formBuilder.group({\n" +
                "      id: [null],\n" +
                formControls +
                "    });\n" +
+               "    this.initListners();\n" +
                "  }\n\n" +
-               "  ngOnInit(): void {\n" +
-               "    this.service.selecionado$.pipe(takeUntil(this.destroy$)).subscribe(item => {\n" +
-               "      if (item) {\n" +
-               "        this.isEdicao = true;\n" +
-               "        this.form.patchValue(item);\n" +
-               "      } else {\n" +
-               "        this.isEdicao = false;\n" +
-               "        this.form.reset();\n" +
-               "      }\n" +
-               "    });\n" +
+               "  private initListners(): void {\n" +
+               "    this.subscription = this.service.get" + pascal + "Selecionado().pipe(\n" +
+               "      tap((param) => {\n" +
+               "        if (param) {\n" +
+               "          setTimeout(() => {\n" +
+               "            this.isEdicao = true;\n" +
+               "            this.formGroup.patchValue(param);\n" +
+               "          }, 100);\n" +
+               "        }\n" +
+               "      })\n" +
+               "    ).subscribe();\n" +
                "  }\n\n" +
-               "  salvar(): void {\n" +
-               "    if (this.form.invalid) { return; }\n" +
-               "    const model: " + pascal + "Model = { ...this.form.getRawValue(), isEdicao: this.isEdicao };\n" +
+               "  public btnSalvar(): void {\n" +
+               "    if (!this.formGroup.valid) {\n" +
+               "      this.validationMessage.visibled = true;\n" +
+               "      return;\n" +
+               "    }\n" +
+               "    const model: " + pascal + "Model = { ...this.formGroup.getRawValue() };\n" +
+               "    this.service.set" + pascal + "Selecionado(null);\n" +
                "    this.service.handleSalvar(model);\n" +
                "  }\n\n" +
-               "  voltar(): void {\n" +
-               "    this.service.setModoLista();\n" +
+               "  public btnVoltar(): void {\n" +
+               "    this.service.set" + pascal + "Selecionado(null);\n" +
+               "    this.service.changePage(" + pascal + "Pages.Inicio);\n" +
                "  }\n\n" +
-               "  ngOnDestroy(): void {\n" +
-               "    this.destroy$.next();\n" +
-               "    this.destroy$.complete();\n" +
+               "  public ngOnDestroy(): void {\n" +
+               "    this.subscription.unsubscribe();\n" +
                "  }\n" +
                "}\n";
     }
@@ -840,7 +857,7 @@ public class AngularCodeGenerator {
     private String genCadastroHtml(String kebab, DelphiClass dc, DfmForm form) {
         List<ResolvedField> fields = resolveFields(dc, form);
         StringBuilder sb = new StringBuilder();
-        sb.append("<div [formGroup]=\"form\">\n");
+        sb.append("<div [formGroup]=\"formGroup\">\n");
         sb.append("  <div class=\"row logus-row\">\n");
 
         for (ResolvedField f : fields) {
@@ -862,7 +879,7 @@ public class AngularCodeGenerator {
             }
 
             if (isRequired) {
-                sb.append("      <app-validation-message [validationMessage]=\"validationMessage\" [control]=\"form.controls.").append(f.camelName).append("\"></app-validation-message>\n");
+                sb.append("      <app-validation-message [validationMessage]=\"validationMessage\" [control]=\"formGroup.controls.").append(f.camelName).append("\"></app-validation-message>\n");
             }
             sb.append("    </div>\n");
         }
@@ -871,11 +888,9 @@ public class AngularCodeGenerator {
         sb.append("</div>\n");
         sb.append("<div class=\"row logus-row border-bottom\">\n");
         sb.append("  <div class=\"col-xs-6 col-sm-6 col-md-6 col-lg-12\">\n");
-        sb.append("    <app-button ngTypeButton=\"salvar\" ngClass=\"float-right\" (onClick)=\"salvar()\"></app-button>\n");
-        sb.append("    <app-button ngTypeButton=\"voltar\" ngClass=\"float-right\" (onClick)=\"voltar()\"></app-button>\n");
+        sb.append("    <app-button ngTypeButton=\"salvar\" ngClass=\"float-right\" (onClick)=\"btnSalvar()\"></app-button>\n");
+        sb.append("    <app-button ngTypeButton=\"voltar\" ngClass=\"float-right\" (onClick)=\"btnVoltar()\"></app-button>\n");
         sb.append("  </div>\n");
-        sb.append("    </div>\n");
-        sb.append("  </form>\n");
         sb.append("</div>\n");
         return sb.toString();
     }
@@ -886,18 +901,17 @@ public class AngularCodeGenerator {
                "import { CommonModule } from '@angular/common';\n" +
                "import { FormsModule, ReactiveFormsModule } from '@angular/forms';\n" +
                "import { " + pascal + "CadastroComponent } from './" + kebab + "-cadastro.component';\n" +
-               "import { ButtonModule } from '@shared/components/button/button.module';\n" +
-               "import { ValidationMessageModule } from '@shared/components/validation-message/validation-message.module';\n" +
+               "import { ButtonModule } from '@shared/button/button.module';\n" +
+               "import { ValidationMessageModule } from '@shared/validation-message/validation-message.module';\n" +
                "import { InputTextModule } from 'primeng/inputtext';\n" +
-               "import { DropdownModule } from 'primeng/dropdown';\n" +
-               "import { CheckboxModule } from 'primeng/checkbox';\n" +
-               "import { CurrencyMaskModule } from 'ng2-currency-mask';\n\n" +
+               "import { InputNumberModule } from 'primeng/inputnumber';\n" +
+               "import { CheckboxModule } from 'primeng/checkbox';\n\n" +
                "@NgModule({\n" +
                "  declarations: [" + pascal + "CadastroComponent],\n" +
                "  imports: [\n" +
                "    CommonModule, FormsModule, ReactiveFormsModule,\n" +
                "    ButtonModule, ValidationMessageModule,\n" +
-               "    InputTextModule, DropdownModule, CheckboxModule, CurrencyMaskModule\n" +
+               "    InputTextModule, InputNumberModule, CheckboxModule\n" +
                "  ],\n" +
                "  exports: [" + pascal + "CadastroComponent]\n" +
                "})\n" +

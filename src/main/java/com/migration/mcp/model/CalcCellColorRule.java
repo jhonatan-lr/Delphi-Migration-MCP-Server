@@ -16,6 +16,9 @@ public class CalcCellColorRule {
     private String conditionField;     // "flg_tp_pedido" — campo que determina a cor
     private List<ColorMapping> colorMappings = new ArrayList<>();
     private String angularCode;        // código [ngClass] ou [ngStyle] sugerido
+    /** "COLOR_ONLY" (CalcCellColors) ou "FULL_RENDERER" (DrawColumnCell — requer ng-template manual) */
+    private String renderType = "COLOR_ONLY";
+    private String migrationNote;      // nota adicional de migração
 
     // ── Getters / Setters ──────────────────────────────────────────────────
 
@@ -27,6 +30,10 @@ public class CalcCellColorRule {
     public void setColorMappings(List<ColorMapping> colorMappings) { this.colorMappings = colorMappings; }
     public String getAngularCode() { return angularCode; }
     public void setAngularCode(String angularCode) { this.angularCode = angularCode; }
+    public String getRenderType() { return renderType; }
+    public void setRenderType(String renderType) { this.renderType = renderType; }
+    public String getMigrationNote() { return migrationNote; }
+    public void setMigrationNote(String migrationNote) { this.migrationNote = migrationNote; }
 
     // ── Nested: ColorMapping ────────────────────────────────────────────────
 

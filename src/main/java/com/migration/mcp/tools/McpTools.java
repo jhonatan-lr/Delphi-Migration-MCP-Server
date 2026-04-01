@@ -1439,6 +1439,24 @@ generate_migration_plan(
 )
 ```
 
+### Diretório de dados persistidos
+
+O MCP persiste dois arquivos entre sessões:
+- `project-profile.json` — perfil aprendido pelo `learn_repository`
+- `entity-patterns.json` — metadados do banco aprendidos pelo `learn_database`
+
+O caminho do diretório é controlado pela system property **`delphi.mcp.home`**, definida \
+no `.mcp.json` que lança o servidor:
+```json
+"-Ddelphi.mcp.home=C:\\\\Users\\\\Usuario\\\\.delphi-mcp"
+```
+Essa property garante que CLI e IDE usem **sempre o mesmo diretório**, independente de \
+como cada processo resolve `user.home`. Se a property não estiver definida (ex: testes \
+unitários), o MCP faz fallback para `{user.home}/.delphi-mcp`.
+
+Para ver o caminho atual em uso: o log de inicialização do MCP imprime \
+`ProfileStore inicializado — dir=...` na primeira linha.
+
 """;
 
     private static final String TOOLS_REFERENCE = """
@@ -1490,19 +1508,29 @@ A tool `extract_business_rules` retorna até 10 seções complementares numa ún
 ### 1. rules — Validações e cálculos
 - Validações com `TLogusMessage.Warning`, `raise Exception`, `ShowMessage`
 - Cálculos complexos (atribuições numéricas)
+- **cascade_validation**: detecta N≥2 blocos `if not X.IsEmpty then ShowMessage('...')` sequenciais \
+no mesmo método (ex: bbtDesativarClick verificando 6 tabelas antes de permitir a ação). Gera uma \
+regra agrupada com ruleType=`cascade_validation`, todas as mensagens concatenadas e Java stub com \
+um `if (repository.existsRelated(id)) throw new ValidationException(...)` por check.
 - Cada regra inclui `suggestedJavaCode` e classifica como backend vs frontend
 
 ### 2. formInitialization — Lógica de abertura da tela (FormShow/FormCreate)
-- **defaultValues**: campos inicializados com data atual, valores fixos
+- **defaultValues**: campos inicializados com data atual, valores fixos; captura também \
+`.SortColumn`, `.SortType` e `.SelectedIndex`
 - **conditionalDefaults**: campos pré-selecionados e desabilitados condicionalmente
 - **comboPreselections**: itens pré-selecionados em combos multi-select
-- **autoLoads**: chamadas a Carregar*/Load* executadas ao abrir
-- **initialStates**: campos desabilitados/ocultos na inicialização
+- **autoLoads**: chamadas a `Carregar*/Pesquisar*/Load*/Inicializa*/Iniciar*/Init*/Setup*` \
+executadas ao abrir (prefixos expandidos)
+- **initialStates**: campos desabilitados/ocultos na inicialização; inclui `setup_via_method` \
+quando FormShow/FormCreate chama `HabilitaComponentes`, `AtualizaEstado`, `ConfiguraComponentes` \
+ou similares (indicando que a lógica de estado está num método auxiliar)
 
 ### 3. buttonStateRules — Máquina de estados dos botões (AfterScroll + Click)
 Combina informações de **quando** o botão está habilitado (AfterScroll) com **o que** \
 ele faz ao ser clicado (Click handler):
-- **enableConditions**: condições do `EnableComponent` no AfterScroll (suporta multi-linha)
+- **enableConditions**: condições do `EnableComponent` no AfterScroll — split depth-aware que \
+respeita parênteses aninhados; ex: `(not cds.IsEmpty) and (Parametros.X)` extraído como 2 \
+condições separadas em vez de 1 bloco literal
 - **confirmMessage**: texto do `TLogusMessage.Confirm` com template `{campo}` para variáveis
 - **action**: método de negócio chamado (ex: `TPedidoAutomatico.Cancelar`)
 - **actionType**: classificação — `business_method`, `navigation`, `report`, `search`, `crud`

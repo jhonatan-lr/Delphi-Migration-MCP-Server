@@ -197,7 +197,13 @@ public class DfmFormParser {
             DfmComponent comp = new DfmComponent();
             comp.setName(compName);
             comp.setDelphiType(compType);
-            comp.setAngularEquivalent(COMPONENT_MAP.getOrDefault(compType, "<div> (sem mapeamento direto)"));
+            // Detecta multi-select antes de definir o equivalente Angular
+            boolean isMultiSelect = compBlock.matches("(?si).*\\bMultiSelect\\s*=\\s*True.*");
+            String angularEquiv = COMPONENT_MAP.getOrDefault(compType, "<div> (sem mapeamento direto)");
+            if (isMultiSelect && (compType.contains("LookupCombo") || compType.contains("LgCorporativo"))) {
+                angularEquiv = "<app-dropdown-multiselect ngType=\"multiselect\" ngConsulta=\"custom\"> (PrimeNG multiselect)";
+            }
+            comp.setAngularEquivalent(angularEquiv);
 
             // Extrai propriedades relevantes
             Map<String, String> props = extractProperties(compBlock);
@@ -279,7 +285,7 @@ public class DfmFormParser {
                 if (parts.length >= 3) {
                     String field = parts[0].trim();
                     int width = 10;
-                    try { width = Integer.parseInt(parts[1].trim()); } catch (Exception ignored) {}
+                    try { width = Integer.parseInt(parts[1].trim()); } catch (NumberFormatException e) { log.warn("DFM grid column width inválido: '{}', usando 10", parts[1]); }
                     // Item 5: limpar tabs e espaços extras dos headers
                     String header = decodeDfmString(parts[2].trim()).replaceAll("[\\t\\r\\n]+", " ").trim();
                     String subHeader = parts.length >= 5

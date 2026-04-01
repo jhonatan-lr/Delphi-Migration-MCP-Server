@@ -15,3 +15,13 @@ logs/
 *~
 .DS_Store
 Thumbs.db
+
+# GSD / planning / tooling
+.planning/
+.specify/
+.claude/commands/
+.claude/skills/
+.claude/worktrees/
+openspec/
+specs/
+CODEX_SETUP.md

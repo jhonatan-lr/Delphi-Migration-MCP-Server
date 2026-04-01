@@ -99,6 +99,26 @@ public class DelphiSourceParser {
         unit.setCalledForms(extractCalledForms(cleaned, navigations));
         unit.setFormNavigations(navigations);
 
+        // Constantes e tipos enum locais
+        unit.setConstants(extractConstants(cleaned));
+        unit.setEnumTypes(extractEnumTypes(cleaned));
+
+        // Regras de estado de botões (AfterScroll + Click handlers)
+        List<ButtonStateRule> btnRules = extractButtonStateRules(cleaned);
+        if (!btnRules.isEmpty()) unit.setButtonStateRules(btnRules);
+
+        // Regras de colorização de células (CalcCellColors)
+        List<CalcCellColorRule> colorRules = extractCalcCellColorRules(cleaned);
+        if (!colorRules.isEmpty()) unit.setCalcCellColorRules(colorRules);
+
+        // Inicialização de formulário (FormShow/FormCreate)
+        List<FormInitialization> formInits = extractFormInitialization(cleaned);
+        if (!formInits.isEmpty()) unit.setFormInitializations(formInits);
+
+        // Fronteiras de transação (StartTransaction/Commit/Rollback → @Transactional)
+        List<TransactionBoundary> txBoundaries = extractTransactionBoundaries(cleaned);
+        if (!txBoundaries.isEmpty()) unit.setTransactionBoundaries(txBoundaries);
+
         log.debug("Parsed unit '{}': {} classes, {} SQL, {} rules, {} called forms",
                 unit.getUnitName(),
                 unit.getClasses().size(),
@@ -169,16 +189,30 @@ public class DelphiSourceParser {
         while (i < src.length()) {
             char c = src.charAt(i);
             sb.append(c);
-            String sub = src.substring(i).toLowerCase();
-            if (sub.startsWith("begin") || sub.startsWith("class") || sub.startsWith("record")) depth++;
-            if (sub.startsWith("end")) {
-                if (depth <= 1) break;
-                depth--;
+            // Only check at word boundaries (previous char not alphanumeric/_)
+            if (i == 0 || (!Character.isLetterOrDigit(src.charAt(i - 1)) && src.charAt(i - 1) != '_')) {
+                String sub = src.substring(i).toLowerCase();
+                // "class" removed intentionally — class procedure/function falsely incremented depth
+                if (sub.startsWith("begin") && !isWordChar(src, i + 5)) {
+                    depth++;
+                } else if (sub.startsWith("record") && !isWordChar(src, i + 6)) {
+                    depth++;
+                } else if (sub.startsWith("end") && !isWordChar(src, i + 3)) {
+                    if (depth <= 1) break;
+                    depth--;
+                }
             }
             i++;
-            if (sb.length() > 5000) break; // limit
+            if (sb.length() > 20000) break; // limit
         }
         return sb.toString();
+    }
+
+    /** True se o caractere na posição idx é letra, dígito ou underscore */
+    private boolean isWordChar(String s, int idx) {
+        if (idx >= s.length()) return false;
+        char c = s.charAt(idx);
+        return Character.isLetterOrDigit(c) || c == '_';
     }
 
     private List<DelphiField> extractFields(String block) {
@@ -197,26 +231,72 @@ public class DelphiSourceParser {
                 f.setComponent(isComponentType(fm.group(2)));
                 fields.add(f);
             }
+            // Captura campos F-prefixados com multi-var: FNome1, FNome2: Tipo;
+            Pattern fMultiPattern = Pattern.compile(
+                "(?i)^\\s*(F[A-Za-z]\\w*(?:\\s*,\\s*F[A-Za-z]\\w*)*)\\s*:\\s*([\\w<>\\[\\]]+)\\s*;",
+                Pattern.MULTILINE);
+            Matcher fmm = fMultiPattern.matcher(sm.group(1));
+            while (fmm.find()) {
+                String[] names = fmm.group(1).split("\\s*,\\s*");
+                String delphiType = fmm.group(2);
+                for (String rawName : names) {
+                    final String name = rawName.trim();
+                    if (name.isEmpty() || isReservedWord(name)) continue;
+                    boolean alreadyAdded = fields.stream().anyMatch(f -> f.getName().equalsIgnoreCase(name));
+                    if (!alreadyAdded) {
+                        DelphiField f = new DelphiField();
+                        f.setName(name);
+                        f.setDelphiType(delphiType);
+                        f.setJavaType(mapDelphiTypeToJava(delphiType));
+                        f.setComponent(false); // F-prefix = estado interno, nao componente visual
+                        fields.add(f);
+                    }
+                }
+            }
         }
+        // Fallback: scan entire block for F-prefixed fields that section detection may have missed
+        Pattern fFallbackPattern = Pattern.compile(
+            "(?i)^\\s*(F[A-Za-z]\\w*)\\s*:\\s*([\\w<>\\[\\]]+)\\s*;",
+            Pattern.MULTILINE);
+        Matcher ffm = fFallbackPattern.matcher(block);
+        while (ffm.find()) {
+            String name = ffm.group(1).trim();
+            if (isReservedWord(name)) continue;
+            boolean alreadyAdded = fields.stream().anyMatch(f -> f.getName().equalsIgnoreCase(name));
+            if (!alreadyAdded) {
+                DelphiField f = new DelphiField();
+                f.setName(name);
+                f.setDelphiType(ffm.group(2));
+                f.setJavaType(mapDelphiTypeToJava(ffm.group(2)));
+                f.setComponent(false);
+                fields.add(f);
+            }
+        }
+
         return fields;
     }
 
     private List<DelphiProcedure> extractMethods(String src, String className) {
         List<DelphiProcedure> methods = new ArrayList<>();
+        // Group 1: optional "class " modifier; Group 2: procedure|function; Group 3: name; Group 4: params; Group 5: return type
         Pattern classMethodPattern = Pattern.compile(
-                "(?i)(procedure|function)\\s+" + Pattern.quote(className) + "\\.(\\w+)\\s*(?:\\(([^)]*)\\))?\\s*(?::\\s*(\\w+))?\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                "(?i)(class\\s+)?(procedure|function)\\s+" + Pattern.quote(className) + "\\.(\\w+)\\s*(?:\\(([^)]*)\\))?\\s*(?::\\s*(\\w+))?\\s*;[\\s\\S]*?(?=^(?:class\\s+(?:procedure|function)|procedure|function|initialization|finalization|end\\.))",
                 Pattern.MULTILINE);
 
         Matcher m = classMethodPattern.matcher(src);
         while (m.find()) {
             DelphiProcedure proc = new DelphiProcedure();
-            proc.setType(m.group(1).toLowerCase());
-            proc.setName(m.group(2));
-            if (m.group(3) != null) {
-                proc.setParameters(Arrays.asList(m.group(3).split(";")));
+            proc.setType(m.group(2).toLowerCase());
+            proc.setName(m.group(3));
+            if (m.group(4) != null) {
+                proc.setParameters(Arrays.asList(m.group(4).split(";")));
             }
-            proc.setReturnType(m.group(4));
-            proc.setJavaReturnType(mapDelphiTypeToJava(m.group(4)));
+            proc.setReturnType(m.group(5));
+            proc.setJavaReturnType(mapDelphiTypeToJava(m.group(5)));
+            // Marca class methods (MakeShowModal, factory methods)
+            if (m.group(1) != null) {
+                proc.setMigrationNotes("class method — Angular: DialogService.open() ou método estático factory");
+            }
 
             // Detecta event handlers
             Matcher evtM = EVENT_HANDLER_PATTERN.matcher(m.group(0));
@@ -275,7 +355,8 @@ public class DelphiSourceParser {
         while (m1.find()) {
             String sql = m1.group(1);
             if (sql != null && sql.trim().length() > 5) {
-                String key = sql.trim().substring(0, Math.min(40, sql.trim().length()));
+                // Use full normalized text as dedup key — avoids false dedup when queries share a long prefix
+                String key = sql.trim().replaceAll("\\s+", " ");
                 if (seen.add(key)) {
                     queries.add(buildSqlQuery(sql.trim(), idx++, src, m1.start()));
                 }
@@ -294,8 +375,8 @@ public class DelphiSourceParser {
         Matcher addM = SQL_ADD_LINE_PATTERN.matcher(src);
         while (addM.find()) markers.add(new int[]{addM.start(), 1});
 
-        // Marcadores de fim (Open, ExecSQL, ExecProc)
-        Matcher endM = Pattern.compile("(?i)(?:\\.|\\b)(?:Open|ExecSQL|ExecProc)\\b").matcher(src);
+        // Marcadores de fim (Open, ExecSQL, ExecProc, Load — usado por LookupComboEdit)
+        Matcher endM = Pattern.compile("(?i)(?:\\.|\\b)(?:Open|ExecSQL|ExecProc|Load)\\b").matcher(src);
         while (endM.find()) markers.add(new int[]{endM.start(), 2});
 
         // Ordena por posição
@@ -553,10 +634,11 @@ public class DelphiSourceParser {
         List<SqlFragment> frags = extractSqlFragmentsFromRange(src, start, end);
         for (SqlFragment frag : frags) {
             if (frag.sql == null || frag.sql.length() <= 5) continue;
-            String key = frag.sql.substring(0, Math.min(40, frag.sql.length()));
+            // Use full normalized text as dedup key — avoids false dedup on queries sharing a long prefix
+            String key = frag.sql.trim().replaceAll("\\s+", " ");
             if (!seen.add(key)) continue;
 
-            SqlQuery q = buildSqlQuery(frag.sql, idx++, src, start);
+            SqlQuery q = buildSqlQuery(frag.sql, idx++, src, start, end);
             if (frag.conditionalBranch != null) {
                 q.setConditionalBranch(frag.conditionalBranch);
             }
@@ -580,7 +662,19 @@ public class DelphiSourceParser {
         }
     }
 
+    // SQL.Add com concatenação: SQL.Add('...' + expr + '...')
+    private static final Pattern SQL_ADD_CONCAT_PATTERN =
+            Pattern.compile("(?i)(?:\\.|\\b)SQL\\.Add\\s*\\(\\s*'([^']*)'\\s*\\+\\s*([^)]+?)\\s*(?:\\+\\s*'([^']*)')?\\s*\\)");
+
+    // ParamByName('nome').AsType := expr
+    private static final Pattern PARAM_BY_NAME_PATTERN =
+            Pattern.compile("(?i)ParamByName\\s*\\(\\s*'(\\w+)'\\s*\\)\\s*\\.(As\\w+)\\s*:=\\s*([^;\\n]+)");
+
     private SqlQuery buildSqlQuery(String sql, int idx, String src, int pos) {
+        return buildSqlQuery(sql, idx, src, pos, -1);
+    }
+
+    private SqlQuery buildSqlQuery(String sql, int idx, String src, int pos, int blockEnd) {
         SqlQuery q = new SqlQuery();
         q.setId("SQL_" + (idx + 1));
         q.setSql(sql);
@@ -589,7 +683,116 @@ public class DelphiSourceParser {
         q.setContext(extractContext(src, pos));
         q.setJpaEquivalent(suggestJpa(sql));
         q.setRepositoryMethod(suggestRepositoryMethod(sql));
+
+        // Extrai injeções dinâmicas no range do bloco SQL
+        extractDynamicInjectionsForQuery(src, pos, q);
+
+        // Extrai tipos dos parâmetros :xxx via ParamByName no método (range limitado ao bloco)
+        extractParamTypesForQuery(src, pos, blockEnd, q);
+
         return q;
+    }
+
+    /** Detecta SQL.Add('...' + expr + '...') e adiciona em dynamicInjections */
+    private void extractDynamicInjectionsForQuery(String src, int blockStart, SqlQuery q) {
+        // Procura no range do bloco (200 chars antes até 3000 chars depois)
+        int from = Math.max(0, blockStart - 200);
+        int to = Math.min(src.length(), blockStart + 3000);
+        String range = src.substring(from, to);
+        Matcher m = SQL_ADD_CONCAT_PATTERN.matcher(range);
+        while (m.find()) {
+            String expr = m.group(2).trim();
+            // Limpa trailing parens e espaços
+            expr = expr.replaceAll("[)\\s]+$", "").trim();
+            if (!expr.isEmpty() && !q.getDynamicInjections().contains(expr)) {
+                q.getDynamicInjections().add(expr);
+            }
+        }
+
+        // Detecta chamadas de metodo auxiliar que recebem componente SQL como argumento
+        // Padrao: NomeMetodo(ComponenteSQL) ou NomeMetodo(ComponenteSQL.SQL)
+        Pattern auxMethodPattern = Pattern.compile(
+            "(?i)\\b([A-Z][A-Za-z]+)\\s*\\(\\s*(\\w+)(?:\\.SQL)?\\s*\\)");
+        Matcher am = auxMethodPattern.matcher(range);
+        Set<String> builtins = Set.of("sql", "add", "clear", "open", "close", "execsql",
+            "showmessage", "messagedlg", "parambyname", "fieldbyname", "format",
+            "inttostr", "floattostr", "datetostr", "assigned", "inherited");
+        while (am.find()) {
+            String methodName = am.group(1);
+            String componentArg = am.group(2);
+            if (!builtins.contains(methodName.toLowerCase())
+                    && !builtins.contains(componentArg.toLowerCase())
+                    && Character.isUpperCase(methodName.charAt(0))) {
+                String injection = "method:" + methodName + "(" + componentArg + ")";
+                if (!q.getDynamicInjections().contains(injection)) {
+                    q.getDynamicInjections().add(injection);
+                }
+            }
+        }
+    }
+
+    /** Extrai ParamByName('x').AsType := valor e anota params com tipo Java */
+    private void extractParamTypesForQuery(String src, int blockStart, SqlQuery q) {
+        extractParamTypesForQuery(src, blockStart, -1, q);
+    }
+
+    private void extractParamTypesForQuery(String src, int blockStart, int blockEnd, SqlQuery q) {
+        // Restringe ao bloco da query para evitar params bleeding de queries vizinhas no mesmo método
+        // from = blockStart (não blockStart - 500): ParamByName sempre vem APÓS SQL.Clear, nunca antes
+        int from = blockStart;
+        int to = blockEnd > blockStart
+                ? Math.min(src.length(), blockEnd)   // params must be set BEFORE Open/ExecSQL
+                : Math.min(src.length(), blockStart + 4000);
+        String range = src.substring(from, to);
+
+        // Mapa de nomes de params já no SQL
+        java.util.Set<String> sqlParams = new java.util.LinkedHashSet<>();
+        Matcher paramM = Pattern.compile(":(\\w+)").matcher(q.getSql() != null ? q.getSql() : "");
+        while (paramM.find()) sqlParams.add(paramM.group(1).toLowerCase());
+
+        Matcher m = PARAM_BY_NAME_PATTERN.matcher(range);
+        while (m.find()) {
+            String name = m.group(1);
+            String asType = m.group(2); // AsInteger, AsString, AsDate, etc.
+            String bindExpr = m.group(3).trim();
+            String javaType = mapDelphiParamType(asType);
+
+            Map<String, String> param = new java.util.LinkedHashMap<>();
+            param.put("name", name);
+            param.put("javaType", javaType);
+            param.put("delphiAsType", asType);
+            param.put("bindExpression", bindExpr);
+            q.getParams().add(param);
+        }
+
+        // Para params no SQL que não têm ParamByName, inferir pelo nome
+        if (!sqlParams.isEmpty()) {
+            java.util.Set<String> bound = new java.util.HashSet<>();
+            for (Map<String, String> p : q.getParams()) bound.add(p.get("name").toLowerCase());
+            for (String pname : sqlParams) {
+                if (!bound.contains(pname)) {
+                    Map<String, String> param = new java.util.LinkedHashMap<>();
+                    param.put("name", pname);
+                    param.put("javaType", guessParamType(pname));
+                    param.put("delphiAsType", "inferred");
+                    q.getParams().add(param);
+                }
+            }
+        }
+    }
+
+    private String mapDelphiParamType(String asType) {
+        if (asType == null) return "String";
+        return switch (asType.toLowerCase()) {
+            case "asinteger", "assmallint", "asword", "asbyte" -> "Integer";
+            case "asfloat", "ascurrency", "asbcd", "asfmtbcd" -> "BigDecimal";
+            case "asstring", "asansistring", "aswidestring", "asmemo" -> "String";
+            case "asdate" -> "LocalDate";
+            case "asdatetime", "astimestamp" -> "LocalDateTime";
+            case "asboolean" -> "Boolean";
+            case "aslargeint" -> "Long";
+            default -> "String";
+        };
     }
 
     private String detectQueryType(String sql) {
@@ -746,6 +949,79 @@ public class DelphiSourceParser {
         };
     }
 
+    // ── Constants & Enum Types ────────────────────────────────────────────────
+
+    /**
+     * Extrai constantes do bloco const da unit.
+     * Ex: paAutomatico = 1; → {"paAutomatico": "1"}
+     */
+    public Map<String, String> extractConstants(String src) {
+        Map<String, String> result = new java.util.LinkedHashMap<>();
+        // Encontra blocos const (podem ter vários na unit)
+        Pattern constBlock = Pattern.compile(
+                "(?i)\\bconst\\b([\\s\\S]*?)(?=\\b(?:type|var|procedure|function|begin|implementation|initialization|finalization)\\b)",
+                Pattern.MULTILINE);
+        Matcher bm = constBlock.matcher(src);
+        while (bm.find()) {
+            String block = bm.group(1);
+            // Extrai cada linha: NomeDaConstante = Valor ;
+            Pattern entry = Pattern.compile(
+                    "(?i)^\\s*(\\w+)\\s*=\\s*([^;\\n]+?)\\s*;",
+                    Pattern.MULTILINE);
+            Matcher em = entry.matcher(block);
+            while (em.find()) {
+                String name = em.group(1).trim();
+                String value = em.group(2).trim();
+                if (!isReservedWord(name)) {
+                    result.put(name, value);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Extrai tipos enum do bloco type da unit.
+     * Ex: TFlgTipoPedido = (paAutomatico, paManual, paTemporario);
+     * Retorna: [{name, values:[...], javaEnum}]
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> extractEnumTypes(String src) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        // Tipos enum: NomeType = (valor1, valor2, ...)
+        Pattern enumPat = Pattern.compile(
+                "(?i)^\\s*(T\\w+)\\s*=\\s*\\(([^)]+)\\)\\s*;",
+                Pattern.MULTILINE);
+        Matcher m = enumPat.matcher(src);
+        while (m.find()) {
+            String typeName = m.group(1);
+            String valuesStr = m.group(2);
+            // Extrai valores (separados por vírgula)
+            String[] parts = valuesStr.split(",");
+            List<String> values = new ArrayList<>();
+            for (String p : parts) {
+                String v = p.trim().replaceAll("=.*", "").trim(); // remove = value se houver
+                if (!v.isEmpty() && !isReservedWord(v)) values.add(v);
+            }
+            if (values.size() >= 2) { // só enum real, não tipos de 1 valor
+                Map<String, Object> entry = new java.util.LinkedHashMap<>();
+                entry.put("name", typeName);
+                entry.put("values", values);
+                // Gera sugestão de enum Java/TypeScript
+                StringBuilder javaEnum = new StringBuilder("export enum " + typeName.replaceAll("^T", "") + " {\n");
+                for (int i = 0; i < values.size(); i++) {
+                    javaEnum.append("  ").append(values.get(i).toUpperCase()).append(" = ").append(i + 1);
+                    if (i < values.size() - 1) javaEnum.append(",");
+                    javaEnum.append("\n");
+                }
+                javaEnum.append("}");
+                entry.put("tsEnum", javaEnum.toString());
+                result.add(entry);
+            }
+        }
+        return result;
+    }
+
     // ── Called Forms (dependências entre telas) ─────────────────────────────
 
     private List<String> extractCalledForms(String src, List<Map<String, String>> navigations) {
@@ -882,7 +1158,7 @@ public class DelphiSourceParser {
     // ── 1. Default Values ──────────────────────────────────────────────────
 
     private static final Pattern DEFAULT_VALUE_PATTERN = Pattern.compile(
-            "(?i)(\\w+)\\.(Date|Text|KeyValue|Value|Checked|ItemIndex|Caption|EditValue|DisplayValue)\\s*:=\\s*([^;]+);");
+            "(?i)(\\w+)\\.(Date|Text|KeyValue|Value|Checked|ItemIndex|Caption|EditValue|DisplayValue|SortColumn|SortType|SelectedIndex)\\s*:=\\s*([^;]+);");
 
     private void extractDefaultValues(String body, String context, FormInitialization init, List<int[]> conditionalRanges) {
         Matcher m = DEFAULT_VALUE_PATTERN.matcher(body);
@@ -1080,12 +1356,20 @@ public class DelphiSourceParser {
     // ── 4. Auto-load ───────────────────────────────────────────────────────
 
     private static final Pattern AUTO_LOAD_PATTERN = Pattern.compile(
-            "(?i)(?:^|;|\\bthen\\b|\\bdo\\b|\\bbegin\\b)\\s*((?:Carregar|Pesquisar|Listar|Load|Buscar|Atualizar|Consultar|Preencher|Montar|Popular|Refresh)\\w*)\\s*(?:\\([^)]*\\))?\\s*;",
+            // 'Abre' prefix added to capture AbreQuery and similar delegation calls
+            "(?i)(?:^|;|\\bthen\\b|\\bdo\\b|\\bbegin\\b)\\s*((?:Carregar|Pesquisar|Listar|Load|Buscar|Atualizar|Consultar|Preencher|Montar|Popular|Refresh|Inicializa|Iniciar|Init|Setup|Abre)\\w*)\\s*(?:\\([^)]*\\))?\\s*;",
+            Pattern.MULTILINE);
+
+    /** Direct dataset .Open() calls: QR_xxx.Open; dsXxx.Open; cdsXxx.Open; vQry.Open */
+    private static final Pattern DATASET_OPEN_PATTERN = Pattern.compile(
+            "(?i)(?:^|;|\\bthen\\b|\\bdo\\b|\\bbegin\\b)\\s*((?:QR_|ds|cds|vQry|\\w*Query)\\w*)\\.Open\\s*;",
             Pattern.MULTILINE);
 
     private void extractAutoLoads(String body, String context, FormInitialization init) {
-        Matcher m = AUTO_LOAD_PATTERN.matcher(body);
         Set<String> seen = new HashSet<>();
+
+        // Named method calls (Carregar*, Pesquisar*, AbreQuery*, etc.)
+        Matcher m = AUTO_LOAD_PATTERN.matcher(body);
         while (m.find()) {
             String method = m.group(1);
             if (!seen.add(method.toLowerCase())) continue;
@@ -1095,6 +1379,21 @@ public class DelphiSourceParser {
             al.setContext(context);
             al.setDescription("Pesquisa/carga executada automaticamente ao abrir a tela");
             al.setMigration("Chamar handlePesquisar() no ngAfterViewInit após inicializar filtros");
+            init.getAutoLoads().add(al);
+        }
+
+        // Direct dataset .Open() calls (QR_ClientesPag.Open, vQry.Open, etc.)
+        Matcher openM = DATASET_OPEN_PATTERN.matcher(body);
+        while (openM.find()) {
+            String component = openM.group(1);
+            String key = component.toLowerCase() + ".open";
+            if (!seen.add(key)) continue;
+
+            FormInitialization.AutoLoad al = new FormInitialization.AutoLoad();
+            al.setMethod(component + ".Open");
+            al.setContext(context);
+            al.setDescription("Dataset " + component + " carregado ao abrir a tela");
+            al.setMigration("Chamar endpoint de pesquisa no ngAfterViewInit para pré-carregar " + component);
             init.getAutoLoads().add(al);
         }
     }
@@ -1163,6 +1462,23 @@ public class DelphiSourceParser {
             is.setMigration(suggestStateMigration(state));
             init.getInitialStates().add(is);
         }
+
+        // Padrão 4: chamadas a métodos de configuração de estado (HabilitaComponentes, AtualizaEstado, etc.)
+        Pattern stateMethodPattern = Pattern.compile(
+                "(?i)(?:^|;|\\bthen\\b|\\bdo\\b|\\bbegin\\b)\\s*((?:Habilita|HabilitaComponentes|HabilitaBotoes|AtualizaEstado|ConfiguraComponentes|ConfiguraEstado|AtualizaComponentes|AjustaComponentes)\\w*)\\s*(?:\\([^)]*\\))?\\s*;",
+                Pattern.MULTILINE);
+        Matcher m4 = stateMethodPattern.matcher(body);
+        Set<String> seenStateMethods = new HashSet<>();
+        while (m4.find()) {
+            String methodCall = m4.group(1);
+            if (!seenStateMethods.add(methodCall.toLowerCase())) continue;
+            FormInitialization.InitialState is = new FormInitialization.InitialState();
+            is.setComponent(methodCall);
+            is.setState("setup_via_method");
+            is.setDescription("Estado inicial configurado via " + methodCall + "() — habilita/desabilita componentes dinamicamente");
+            is.setMigration("Implementar lógica de " + methodCall + "() no ngOnInit() — chamar handleEstadoInicial() no Service");
+            init.getInitialStates().add(is);
+        }
     }
 
     private String suggestStateMigration(String state) {
@@ -1197,6 +1513,15 @@ public class DelphiSourceParser {
         // ── Pass B: Click handlers → ações ──
         extractClickHandlerActions(src, ruleMap);
 
+        // ── Pass D: DataChange handlers → EnableComponent ──
+        extractEnableComponentFromDataChange(src, ruleMap);
+
+        // ── Pass E: Helper methods (Habilita*, HabilitaBotoes*, etc.) → EnableComponent ──
+        extractEnableComponentFromHelperMethods(src, ruleMap);
+
+        // ── Pass F: Generic event handlers (FormShow, FormCreate, tvwXxx_PChange, etc.) ──
+        extractEnableComponentFromGenericHandlers(src, ruleMap);
+
         // ── Pass C: Gera migration hints ──
         for (ButtonStateRule rule : ruleMap.values()) {
             generateMigrationHints(rule);
@@ -1205,60 +1530,143 @@ public class DelphiSourceParser {
         return new ArrayList<>(ruleMap.values());
     }
 
+    /**
+     * Shared helper: scans a method body for TLogusWinControl.EnableComponent calls
+     * and populates ruleMap with button enable conditions.
+     */
+    private void extractEnableComponentCalls(String body, String dataset, Map<String, ButtonStateRule> ruleMap) {
+        Pattern enableStart = Pattern.compile("(?i)TLogusWinControl\\.EnableComponent\\s*\\(");
+        Matcher em = enableStart.matcher(body);
+
+        while (em.find()) {
+            int openParen = em.end() - 1;
+            String args = extractBalancedParens(body, openParen);
+            if (args == null) continue;
+
+            int firstComma = findTopLevelComma(args);
+            if (firstComma < 0) continue;
+
+            String buttonName = args.substring(0, firstComma).trim();
+            String condition = args.substring(firstComma + 1).trim();
+
+            ButtonStateRule rule = ruleMap.computeIfAbsent(buttonName.toLowerCase(),
+                    k -> { ButtonStateRule r = new ButtonStateRule(); r.setButtonName(buttonName); return r; });
+            if (rule.getDataset() == null) rule.setDataset(dataset);
+            rule.setEnableConditionRaw(condition);
+            parseEnableConditions(condition, rule);
+
+            Matcher fm = Pattern.compile("(?i)FieldByName\\s*\\(\\s*'([^']+)'\\s*\\)").matcher(body);
+            while (fm.find()) {
+                String field = fm.group(1);
+                if (!rule.getFieldReferences().contains(field)) {
+                    rule.getFieldReferences().add(field);
+                }
+            }
+
+            Matcher pm = Pattern.compile("(?i)(Parametros(?:\\.\\w+)+)").matcher(condition);
+            if (pm.find()) {
+                rule.setRequiresPermission(pm.group(1));
+            }
+        }
+    }
+
+    /**
+     * Scans a method body for direct conditional Enabled assignments of button-like components:
+     *   bbtFoo.Enabled := <non-literal expression>
+     * Complements extractEnableComponentCalls for code that does not use TLogusWinControl.EnableComponent.
+     */
+    private void extractDirectEnabledAssignments(String body, String dataset, Map<String, ButtonStateRule> ruleMap) {
+        Pattern enabledPat = Pattern.compile(
+            "(?i)(\\w+)\\.Enabled\\s*:=\\s*([^;\\r\\n]{5,});",
+            Pattern.MULTILINE);
+        Matcher em = enabledPat.matcher(body);
+        while (em.find()) {
+            String buttonName = em.group(1);
+            String condition  = em.group(2).trim();
+            // Skip simple boolean literals — those are initial states already handled elsewhere
+            if (condition.equalsIgnoreCase("true") || condition.equalsIgnoreCase("false")) continue;
+            // Only capture button-like components (bbt, btn, sbt, bit, pbt prefixes)
+            String lower = buttonName.toLowerCase();
+            if (!lower.startsWith("bbt") && !lower.startsWith("btn") && !lower.startsWith("sbt") &&
+                !lower.startsWith("bit") && !lower.startsWith("pbt") && !lower.contains("button")) continue;
+
+            ButtonStateRule rule = ruleMap.computeIfAbsent(buttonName.toLowerCase(),
+                k -> { ButtonStateRule r = new ButtonStateRule(); r.setButtonName(buttonName); return r; });
+            if (rule.getDataset() == null) rule.setDataset(dataset);
+            rule.setEnableConditionRaw(condition);
+            parseEnableConditions(condition, rule);
+        }
+    }
+
     private void extractEnableComponentFromAfterScroll(String src, Map<String, ButtonStateRule> ruleMap) {
-        // Encontra todos os métodos AfterScroll
         Pattern afterScrollPattern = Pattern.compile(
                 "(?i)procedure\\s+\\w+\\.(\\w+AfterScroll)\\s*\\([^)]*\\)\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
                 Pattern.MULTILINE);
         Matcher mm = afterScrollPattern.matcher(src);
-
         while (mm.find()) {
             String methodName = mm.group(1);
             String body = mm.group(0);
             if (body.length() > 15000) body = body.substring(0, 15000);
-
-            // Extrai nome do dataset do método (cdsPedidosAutomaticosAfterScroll → cdsPedidosAutomaticos)
             String dataset = methodName.replaceAll("(?i)AfterScroll$", "");
+            extractEnableComponentCalls(body, dataset, ruleMap);
+            extractDirectEnabledAssignments(body, dataset, ruleMap);
+        }
+    }
 
-            // Encontra cada EnableComponent usando scanner de parênteses balanceados
-            Pattern enableStart = Pattern.compile("(?i)TLogusWinControl\\.EnableComponent\\s*\\(");
-            Matcher em = enableStart.matcher(body);
+    /** Pass D: DataChange event handlers also carry EnableComponent logic */
+    private void extractEnableComponentFromDataChange(String src, Map<String, ButtonStateRule> ruleMap) {
+        Pattern dataChangePattern = Pattern.compile(
+                "(?i)procedure\\s+\\w+\\.(\\w+DataChange)\\s*\\([^)]*\\)\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                Pattern.MULTILINE);
+        Matcher mm = dataChangePattern.matcher(src);
+        while (mm.find()) {
+            String methodName = mm.group(1);
+            String body = mm.group(0);
+            if (body.length() > 15000) body = body.substring(0, 15000);
+            String dataset = methodName.replaceAll("(?i)DataChange$", "");
+            extractEnableComponentCalls(body, dataset, ruleMap);
+            extractDirectEnabledAssignments(body, dataset, ruleMap);
+        }
+    }
 
-            while (em.find()) {
-                int openParen = em.end() - 1; // posição do '('
-                String args = extractBalancedParens(body, openParen);
-                if (args == null) continue;
+    /** Pass E: Auxiliary methods (HabilitaComponentes, HabilitaBotoes, AjustaComponentes, etc.) */
+    private void extractEnableComponentFromHelperMethods(String src, Map<String, ButtonStateRule> ruleMap) {
+        Pattern helperPattern = Pattern.compile(
+                "(?i)procedure\\s+\\w+\\.((?:Habilita|HabilitaComponentes|HabilitaBotoes|AjustaComponentes|ConfiguraComponentes)\\w*)\\s*(?:\\([^)]*\\))?\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                Pattern.MULTILINE);
+        Matcher mm = helperPattern.matcher(src);
+        while (mm.find()) {
+            String body = mm.group(0);
+            if (body.length() > 15000) body = body.substring(0, 15000);
+            extractEnableComponentCalls(body, "helper", ruleMap);
+            extractDirectEnabledAssignments(body, "helper", ruleMap);
+        }
+    }
 
-                // Separa buttonName da condition no primeiro ',' top-level
-                int firstComma = findTopLevelComma(args);
-                if (firstComma < 0) continue;
-
-                String buttonName = args.substring(0, firstComma).trim();
-                String condition = args.substring(firstComma + 1).trim();
-
-                ButtonStateRule rule = ruleMap.computeIfAbsent(buttonName.toLowerCase(),
-                        k -> { ButtonStateRule r = new ButtonStateRule(); r.setButtonName(buttonName); return r; });
-                rule.setDataset(dataset);
-                rule.setEnableConditionRaw(condition);
-
-                // Extrai condições individuais (split por 'and'/'or' top-level)
-                parseEnableConditions(condition, rule);
-
-                // Extrai field references: FieldByName('campo')
-                Matcher fm = Pattern.compile("(?i)FieldByName\\s*\\(\\s*'([^']+)'\\s*\\)").matcher(condition);
-                while (fm.find()) {
-                    String field = fm.group(1);
-                    if (!rule.getFieldReferences().contains(field)) {
-                        rule.getFieldReferences().add(field);
-                    }
-                }
-
-                // Extrai permissões: Parametros.X.Y.Z
-                Matcher pm = Pattern.compile("(?i)(Parametros(?:\\.\\w+)+)").matcher(condition);
-                if (pm.find()) {
-                    rule.setRequiresPermission(pm.group(1));
-                }
-            }
+    /**
+     * Pass F: Catches any procedure that contains button Enabled assignments but was not
+     * covered by Passes A/D/E (e.g. FormShow, FormCreate, tvwXxx_PChange, etc.).
+     * Uses a quick-check on the body before applying regex to avoid unnecessary work.
+     */
+    private void extractEnableComponentFromGenericHandlers(String src, Map<String, ButtonStateRule> ruleMap) {
+        Pattern anyMethodPattern = Pattern.compile(
+                "(?i)procedure\\s+\\w+\\.(\\w+)\\s*(?:\\([^)]*\\))?\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                Pattern.MULTILINE);
+        Matcher mm = anyMethodPattern.matcher(src);
+        while (mm.find()) {
+            String methodName = mm.group(1);
+            // Skip methods already handled by other passes
+            String lower = methodName.toLowerCase();
+            if (lower.endsWith("afterscroll") || lower.endsWith("datachange")) continue;
+            if (lower.startsWith("habilita") || lower.startsWith("ajustacomponentes") ||
+                lower.startsWith("configuracomponentes")) continue;
+            String body = mm.group(0);
+            // Quick-check: only process bodies that mention Enabled or EnableComponent
+            String bodyLower = body.toLowerCase();
+            if (!bodyLower.contains(".enabled") && !bodyLower.contains("enablecomponent")) continue;
+            if (body.length() > 15000) body = body.substring(0, 15000);
+            extractDirectEnabledAssignments(body, methodName, ruleMap);
+            extractEnableComponentCalls(body, methodName, ruleMap);
         }
     }
 
@@ -1373,17 +1781,60 @@ public class DelphiSourceParser {
     }
 
     private void parseEnableConditions(String condition, ButtonStateRule rule) {
-        // Divide por 'and' e 'or' preservando a estrutura
-        // Remove parênteses externas e normaliza espaços
         String clean = condition.replaceAll("\\s+", " ").trim();
-        // Split simples por and/or — cada parte é uma condição individual
-        String[] parts = clean.split("(?i)\\b(?:and|or)\\b");
+        // Remove outer parens wrapping the ENTIRE condition
+        while (clean.startsWith("(") && findMatchingClose(clean, 0) == clean.length() - 1) {
+            clean = clean.substring(1, clean.length() - 1).trim();
+        }
+        // Split at top-level 'and'/'or' only (respects nested parentheses)
+        List<String> parts = splitByTopLevelAndOr(clean);
         for (String part : parts) {
             String trimmed = part.trim().replaceAll("^\\(+|\\)+$", "").trim();
             if (!trimmed.isEmpty() && trimmed.length() > 2) {
                 rule.getEnableConditions().add(trimmed);
             }
         }
+    }
+
+    /** Returns index of closing ')' matching '(' at openPos, or -1 if unmatched. */
+    private int findMatchingClose(String s, int openPos) {
+        int depth = 0;
+        for (int i = openPos; i < s.length(); i++) {
+            if (s.charAt(i) == '(') depth++;
+            else if (s.charAt(i) == ')') {
+                depth--;
+                if (depth == 0) return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Splits expr by ' and '/' or ' at depth-0 only (ignores operators inside parens). */
+    private List<String> splitByTopLevelAndOr(String expr) {
+        List<String> parts = new ArrayList<>();
+        int depth = 0;
+        int start = 0;
+        int len = expr.length();
+        String lower = expr.toLowerCase();
+        for (int i = 0; i < len; i++) {
+            char c = expr.charAt(i);
+            if (c == '(') { depth++; continue; }
+            if (c == ')') { depth--; continue; }
+            if (depth == 0 && c == ' ') {
+                // Check for " and " (space + "and " = 5 chars from i)
+                if (i + 5 <= len && lower.startsWith("and ", i + 1)) {
+                    parts.add(expr.substring(start, i).trim());
+                    start = i + 5;
+                    i += 4;
+                } else if (i + 4 <= len && lower.startsWith("or ", i + 1)) {
+                    parts.add(expr.substring(start, i).trim());
+                    start = i + 4;
+                    i += 3;
+                }
+            }
+        }
+        if (start < len) parts.add(expr.substring(start).trim());
+        return parts.stream().filter(s -> !s.isEmpty()).collect(java.util.stream.Collectors.toList());
     }
 
     private String cleanConfirmMessage(String raw) {
@@ -1655,9 +2106,9 @@ public class DelphiSourceParser {
     public List<CalcCellColorRule> extractCalcCellColorRules(String src) {
         List<CalcCellColorRule> rules = new ArrayList<>();
 
-        // Encontra métodos CalcCellColors
+        // Encontra métodos CalcCellColors, DrawColumnCell, DrawCell
         Pattern methodPattern = Pattern.compile(
-                "(?i)procedure\\s+\\w+\\.(\\w+CalcCellColors)\\s*\\([^)]*\\)\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+                "(?i)procedure\\s+\\w+\\.(\\w+(?:CalcCellColou?rs?|DrawColumnCell|DrawCell))\\s*\\([^)]*\\)\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
                 Pattern.MULTILINE);
         Matcher mm = methodPattern.matcher(src);
 
@@ -1666,20 +2117,26 @@ public class DelphiSourceParser {
             String body = mm.group(0);
             if (body.length() > 10000) body = body.substring(0, 10000);
 
+            boolean isDrawColumnCell = methodName.toLowerCase().contains("drawcolumncell")
+                    || methodName.toLowerCase().contains("drawcell");
+
             // Extrai grid name: grdPedidoAutomaticoCalcCellColors → grdPedidoAutomatico
-            String gridName = methodName.replaceAll("(?i)CalcCellColors$", "");
+            String gridName = methodName
+                    .replaceAll("(?i)CalcCellColou?rs?$", "")
+                    .replaceAll("(?i)DrawColumnCell$", "")
+                    .replaceAll("(?i)DrawCell$", "");
 
             CalcCellColorRule rule = new CalcCellColorRule();
             rule.setGridName(gridName);
 
-            // Detecta campo de condição: FieldByName('campo').AsInteger ou .AsString
-            Matcher fieldM = Pattern.compile("(?i)(?:case\\s+)?\\w+\\.FieldByName\\s*\\(\\s*'([^']+)'\\s*\\)\\.As(Integer|String)").matcher(body);
+            // Detecta campo de condição: FieldByName('campo').AsInteger ou .AsString (qualquer prefixo)
+            Matcher fieldM = Pattern.compile("(?i)FieldByName\\s*\\(\\s*'([^']+)'\\s*\\)\\.As(Integer|String)").matcher(body);
             if (fieldM.find()) {
                 rule.setConditionField(fieldM.group(1));
             }
 
-            // Detecta case/of com cores: N: AFont.Color := clXxx
-            Pattern casePat = Pattern.compile("(?i)(\\d+)\\s*:\\s*AFont\\.Color\\s*:=\\s*(cl\\w+)");
+            // Detecta case/of com cores: N: AColor := clXxx ou N: AFont.Color := clXxx
+            Pattern casePat = Pattern.compile("(?i)(\\d+)\\s*:\\s*(?:AColor|AFont\\.Color)\\s*:=\\s*(cl\\w+)");
             Matcher cm = casePat.matcher(body);
             while (cm.find()) {
                 String value = cm.group(1);
@@ -1689,8 +2146,8 @@ public class DelphiSourceParser {
                 rule.getColorMappings().add(new CalcCellColorRule.ColorMapping(value, cssColor, cssClass, null));
             }
 
-            // Detecta if/then com cores: if (campo = N) then AFont.Color := clXxx
-            Pattern ifColorPat = Pattern.compile("(?i)(?:=\\s*(\\d+)|'([^']+)')\\s*(?:then|:)\\s*[\\s\\S]*?AFont\\.Color\\s*:=\\s*(cl\\w+)");
+            // Detecta if/then com cores: if (campo = N) then AColor := clXxx ou AFont.Color := clXxx
+            Pattern ifColorPat = Pattern.compile("(?i)(?:=\\s*(\\d+)|'([^']+)')\\s*(?:then|:)\\s*[\\s\\S]*?(?:AColor|AFont\\.Color)\\s*:=\\s*(cl\\w+)");
             if (rule.getColorMappings().isEmpty()) {
                 Matcher icm = ifColorPat.matcher(body);
                 while (icm.find()) {
@@ -1701,8 +2158,34 @@ public class DelphiSourceParser {
                 }
             }
 
+            // Fallback: if (...AsInteger = N) then AColor := clXxx (sem FieldByName no mesmo if)
+            if (rule.getColorMappings().isEmpty()) {
+                Pattern ifAColorPat = Pattern.compile(
+                    "(?i)if\\s+[^;]+?(?:AsInteger|AsString)\\s*(?:<>|=)\\s*(\\d+|'[^']+')\\s+then[^;]*?(?:AColor|AFont\\.Color)\\s*:=\\s*(cl\\w+)");
+                Matcher iam = ifAColorPat.matcher(body);
+                while (iam.find()) {
+                    String value = iam.group(1).replace("'", "");
+                    String cssColor = mapDelphiColor(iam.group(2));
+                    rule.getColorMappings().add(new CalcCellColorRule.ColorMapping(value, cssColor, "text-" + cssColor, null));
+                }
+            }
+
             // Tenta associar labels de legenda (lblVerde, lblAzul etc)
             enrichWithLegendLabels(src, rule);
+
+            // DrawColumnCell: renderização customizada completa — requer ng-template manual
+            if (isDrawColumnCell) {
+                rule.setRenderType("FULL_RENDERER");
+                rule.setMigrationNote("DrawColumnCell renderiza canvas customizado (ícones, cores, imagens). "
+                        + "Angular: usar <ng-template pTemplate=\"body\"> na coluna do <p-table> com lógica condicional.");
+                if (rule.getColorMappings().isEmpty()) {
+                    // Mesmo sem color mappings detectados, reportar o handler
+                    rule.setAngularCode("// TODO: Implementar renderização customizada da coluna " + gridName
+                            + " com <ng-template pTemplate=\"body\" let-row>");
+                    rules.add(rule);
+                    continue;
+                }
+            }
 
             // Gera código Angular sugerido
             if (!rule.getColorMappings().isEmpty()) {
@@ -2184,6 +2667,9 @@ public class DelphiSourceParser {
             }
         }
 
+        // Cascade validations: sequential IsEmpty checks in one method
+        rules.addAll(extractCascadeValidations(src));
+
         // Item 4: deduplicar regras pelo sourceCode (mantém a primeira ocorrência)
         Set<String> seenRules = new LinkedHashSet<>();
         List<BusinessRule> dedupedRules = new ArrayList<>();
@@ -2198,6 +2684,96 @@ public class DelphiSourceParser {
             dedupedRules.get(i).setId("BR_" + (i + 1));
         }
         return dedupedRules;
+    }
+
+    /**
+     * Detecta padrão de validação em cascata: método com N>= 2 blocos
+     * "if not X.IsEmpty then begin ShowMessage('...'); Exit; end" em sequência.
+     * Cada bloco corresponde a uma query de verificação antes de permitir a ação.
+     */
+    private List<BusinessRule> extractCascadeValidations(String src) {
+        List<BusinessRule> rules = new ArrayList<>();
+        Pattern methodPat = Pattern.compile(
+            "(?i)procedure\\s+\\w+\\.(\\w+)\\s*(?:\\([^)]*\\))?\\s*;[\\s\\S]*?(?=^(?:procedure|function|initialization|finalization|end\\.))",
+            Pattern.MULTILINE);
+        Matcher mm = methodPat.matcher(src);
+        while (mm.find()) {
+            String methodName = mm.group(1);
+            String body = mm.group(0);
+            if (body.length() > 20000) body = body.substring(0, 20000);
+
+            // Find all guard-query checks: if not X.IsEmpty then ... ShowMessage/TLogusMessage.Warning('...')
+            // Also handles Delphi 'with X do begin ... if not (IsEmpty) then' (no explicit prefix)
+            Pattern isEmptyPat = Pattern.compile(
+                "(?i)if\\s+not\\s+(?:(\\w+)\\.IsEmpty|\\(?IsEmpty\\)?)\\s+then[\\s\\S]{0,300}?(?:ShowMessage|TLogusMessage\\.Warning)\\s*\\(\\s*'([^']+)'",
+                Pattern.DOTALL);
+            Matcher cm = isEmptyPat.matcher(body);
+            List<String[]> checks = new ArrayList<>();
+            while (cm.find()) {
+                String datasetVar = cm.group(1);
+                if (datasetVar == null) {
+                    // Inside a 'with X do' block — find the nearest 'with' before this match
+                    String beforeMatch = body.substring(0, cm.start());
+                    Matcher withM = Pattern.compile("(?i)with\\s+(\\w+)\\s+do").matcher(beforeMatch);
+                    String lastWithVar = "dataset";
+                    while (withM.find()) { lastWithVar = withM.group(1); }
+                    datasetVar = lastWithVar;
+                }
+                checks.add(new String[]{datasetVar, cm.group(2)});
+            }
+            if (checks.isEmpty()) continue;
+
+            // Emit one guard_validation rule per check pair (US2: each pair is a distinct rule)
+            for (int i = 0; i < checks.size(); i++) {
+                String datasetVar = checks.get(i)[0];
+                String message    = checks.get(i)[1];
+                BusinessRule guard = new BusinessRule();
+                guard.setRuleType("guard_validation");
+                guard.setDescription("Verificação antes de prosseguir (" + methodName + "): '" + message + "'");
+                guard.setSourceCode("if not " + datasetVar + ".IsEmpty then ShowMessage('" + message + "') + Exit");
+                guard.setComplexity("medium");
+                guard.setMigrationStrategy(
+                    "Criar método de verificação no Repository. " +
+                    "Lançar ValidationException(\"" + message + "\") antes de prosseguir.");
+                guard.setSuggestedJavaCode(
+                    "if (" + snakeToCamel(datasetVar) + "Repository.existsRelated(id)) {\n" +
+                    "    throw new ValidationException(\"" + message + "\");\n" +
+                    "}");
+                rules.add(guard);
+            }
+
+            // Also emit grouped cascade_validation summary when there are 2+ checks (backward compat)
+            if (checks.size() >= 2) {
+                StringBuilder desc = new StringBuilder();
+                desc.append("Validação em cascata em ").append(methodName)
+                    .append(": ").append(checks.size()).append(" verificações sequenciais — ");
+                for (int i = 0; i < checks.size(); i++) {
+                    if (i > 0) desc.append(" | ");
+                    desc.append(checks.get(i)[1]);
+                }
+
+                StringBuilder javaCode = new StringBuilder();
+                javaCode.append("// Validações em cascata — ").append(methodName).append("\n");
+                for (int i = 0; i < checks.size(); i++) {
+                    javaCode.append("// Verificação ").append(i + 1).append("\n");
+                    javaCode.append("if (").append(snakeToCamel(checks.get(i)[0])).append("Repository.existsRelated(id)) {\n");
+                    javaCode.append("    throw new ValidationException(\"").append(checks.get(i)[1]).append("\");\n");
+                    javaCode.append("}\n");
+                }
+
+                BusinessRule summary = new BusinessRule();
+                summary.setRuleType("cascade_validation");
+                summary.setDescription(desc.toString());
+                summary.setSourceCode("cascade:" + methodName + ":" + checks.size() + "_checks");
+                summary.setComplexity("high");
+                summary.setMigrationStrategy(
+                    "Criar " + checks.size() + " métodos de verificação no Service/Repository. " +
+                    "Cada um lança ValidationException com a mensagem original antes de prosseguir.");
+                summary.setSuggestedJavaCode(javaCode.toString());
+                rules.add(summary);
+            }
+        }
+        return rules;
     }
 
     private String generateValidationJava(String condition, String action) {

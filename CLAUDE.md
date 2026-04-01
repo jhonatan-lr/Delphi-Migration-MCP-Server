@@ -1,4 +1,4 @@
-# Delphi Migration MCP Server
+﻿# Delphi Migration MCP Server
 
 ## REGRA CRITICA DE SEGURANCA — BANCO DE DADOS
 

@@ -2,6 +2,7 @@ package com.migration.mcp.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -27,6 +28,24 @@ public class DelphiUnit {
 
     /** Navegação detalhada entre forms: tipo de chamada, parâmetros passados, contexto */
     private List<Map<String, String>> formNavigations = new ArrayList<>();
+
+    /** Constantes locais definidas no bloco const da unit: nome → valor */
+    private Map<String, String> constants = new LinkedHashMap<>();
+
+    /** Tipos enum definidos na unit: [{name, values:[...], javaEnum}] */
+    private List<Map<String, Object>> enumTypes = new ArrayList<>();
+
+    /** Regras de estado de botões (AfterScroll + Click handlers) */
+    private List<ButtonStateRule> buttonStateRules = new ArrayList<>();
+
+    /** Regras de colorização de células do grid (CalcCellColors) */
+    private List<CalcCellColorRule> calcCellColorRules = new ArrayList<>();
+
+    /** Inicialização de formulário (FormShow/FormCreate: defaults, combos, auto-loads) */
+    private List<FormInitialization> formInitializations = new ArrayList<>();
+
+    /** Fronteiras de transação (StartTransaction/Commit/Rollback) → @Transactional */
+    private List<TransactionBoundary> transactionBoundaries = new ArrayList<>();
 
     // getters e setters
     public String getUnitName() { return unitName; }
@@ -64,4 +83,22 @@ public class DelphiUnit {
 
     public List<Map<String, String>> getFormNavigations() { return formNavigations; }
     public void setFormNavigations(List<Map<String, String>> formNavigations) { this.formNavigations = formNavigations; }
+
+    public Map<String, String> getConstants() { return constants; }
+    public void setConstants(Map<String, String> constants) { this.constants = constants; }
+
+    public List<Map<String, Object>> getEnumTypes() { return enumTypes; }
+    public void setEnumTypes(List<Map<String, Object>> enumTypes) { this.enumTypes = enumTypes; }
+
+    public List<ButtonStateRule> getButtonStateRules() { return buttonStateRules; }
+    public void setButtonStateRules(List<ButtonStateRule> buttonStateRules) { this.buttonStateRules = buttonStateRules; }
+
+    public List<CalcCellColorRule> getCalcCellColorRules() { return calcCellColorRules; }
+    public void setCalcCellColorRules(List<CalcCellColorRule> calcCellColorRules) { this.calcCellColorRules = calcCellColorRules; }
+
+    public List<FormInitialization> getFormInitializations() { return formInitializations; }
+    public void setFormInitializations(List<FormInitialization> formInitializations) { this.formInitializations = formInitializations; }
+
+    public List<TransactionBoundary> getTransactionBoundaries() { return transactionBoundaries; }
+    public void setTransactionBoundaries(List<TransactionBoundary> transactionBoundaries) { this.transactionBoundaries = transactionBoundaries; }
 }

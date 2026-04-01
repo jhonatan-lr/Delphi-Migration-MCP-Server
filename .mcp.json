@@ -6,6 +6,7 @@
       "args": [
         "-Xmx1024m",
         "-Dfile.encoding=UTF-8",
+        "-Ddelphi.mcp.home=C:\\Users\\Usuario\\.delphi-mcp",
         "-jar",
         "C:\\Users\\Usuario\\Desktop\\MCP\\delphi-migration-mcp\\target\\delphi-migration-mcp-1.0.0.jar"
       ]

@@ -25,12 +25,12 @@ public class ProjectProfileStore {
     private static final Path PATTERNS_FILE;
 
     static {
-        Path dir;
-        try {
-            dir = Path.of(System.getProperty("user.home", "C:\\Users\\Usuario"), ".delphi-mcp");
-        } catch (Exception e) {
-            dir = Path.of("C:\\Users\\Usuario\\.delphi-mcp");
-        }
+        // delphi.mcp.home definido explicitamente no .mcp.json garante caminho idêntico
+        // entre CLI e IDE (user.home pode variar dependendo de como a IDE lança o JVM).
+        String explicitHome = System.getProperty("delphi.mcp.home");
+        Path dir = explicitHome != null && !explicitHome.isBlank()
+                ? Path.of(explicitHome)
+                : Path.of(System.getProperty("user.home"), ".delphi-mcp");
         PROFILE_DIR = dir;
         PROFILE_FILE = dir.resolve("project-profile.json");
         PATTERNS_FILE = dir.resolve("entity-patterns.json");
@@ -59,22 +59,22 @@ public class ProjectProfileStore {
 
     // ── Acesso ───────────────────────────────────────────────────────────────
 
-    public boolean hasProfile() {
+    public synchronized boolean hasProfile() {
         return current != null;
     }
 
-    public ProjectProfile get() {
+    public synchronized ProjectProfile get() {
         return current;
     }
 
-    public void save(ProjectProfile profile) {
+    public synchronized void save(ProjectProfile profile) {
         this.current = profile;
         persistToDisk(profile);
         log.info("Perfil salvo: projeto='{}', tecnologia={}, {} módulos detectados",
                 profile.getProjectName(), profile.getDbTechnology(), profile.getModules().size());
     }
 
-    public void clear() {
+    public synchronized void clear() {
         this.current = null;
         try {
             Files.deleteIfExists(PROFILE_FILE);
@@ -127,11 +127,11 @@ public class ProjectProfileStore {
 
     // ── Target Patterns ─────────────────────────────────────────────────────
 
-    public TargetPatterns getPatterns() { return patterns; }
+    public synchronized TargetPatterns getPatterns() { return patterns; }
 
-    public boolean hasPatterns() { return patterns != null; }
+    public synchronized boolean hasPatterns() { return patterns != null; }
 
-    public void loadPatterns(String filePath) throws IOException {
+    public synchronized void loadPatterns(String filePath) throws IOException {
         Path path = filePath != null ? Path.of(filePath) : PATTERNS_FILE;
         if (path != null && Files.exists(path)) {
             this.patterns = mapper.readValue(path.toFile(), TargetPatterns.class);

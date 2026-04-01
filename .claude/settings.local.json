@@ -32,7 +32,17 @@
       "mcp__delphi-migration__generate_full_module",
       "Bash(node -e \":*)",
       "Bash(node:*)",
-      "mcp__delphi-migration__get_usage_guide"
+      "mcp__delphi-migration__get_usage_guide",
+      "Bash(JAVA_HOME=\"C:/Program Files/Java/jdk-17\" mvn package -DskipTests -q)",
+      "mcp__delphi-migration__learn_database",
+      "Bash(JAVA_HOME=\"C:/Program Files/Java/jdk-17\" mvn compile)",
+      "Bash(find c:/des-jhs/tarefas -name f_ManutencaoPedidoAutomatico*)",
+      "Bash(JAVA_HOME=\"C:/Program Files/Java/jdk-17\" mvn package -DskipTests)",
+      "Bash(JAVA_HOME=\"C:/Program Files/Java/jdk-17\" mvn test -Dtest=FormInitializationTest)",
+      "Bash(JAVA_HOME=\"C:/Program Files/Java/jdk-17\" java -cp target/delphi-migration-mcp-1.0.0.jar com.migration.mcp.parser.DelphiSourceParser)",
+      "Bash(JAVA_HOME=\"C:/Program Files/Java/jdk-17\" mvn test -Dtest=DelphiSourceParserTest)",
+      "WebSearch",
+      "Bash(JAVA_HOME=\"C:/Program Files/Java/jdk-17\" mvn package -DskipTests -f \"C:/Users/Usuario/Desktop/MCP/delphi-migration-mcp/pom.xml\" 2>&1)"
     ]
   },
   "enabledMcpjsonServers": [
